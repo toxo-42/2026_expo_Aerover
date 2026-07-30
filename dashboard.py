@@ -1,12 +1,13 @@
 # dashboard.py
 # 실행: streamlit run dashboard.py
 
-import os, io, socket, struct, time, threading, contextlib, base64
+import os, io, math, socket, struct, time, threading, contextlib, base64
 import cv2, numpy as np
 import streamlit as st
 
 import run_mapping as rm
 import run_detect as det
+import telemetry as tm
 
 PI_IP = "192.168.137.6"
 PORT = 5001
@@ -218,6 +219,54 @@ div[data-testid="stImage"] img{
 .row .v{font-size:.82rem; font-weight:600; color:var(--text);}
 .row .v.cy{color:var(--cyan);}
 .row .v.am{color:var(--amber);}
+.row .v.rd{color:var(--red);}
+.row .v.dim{color:#5d7186;}
+
+/* ---------- 상태 그래픽 (SVG) ---------- */
+.gfx{
+  display:block; width:100%; height:118px;
+  background:#080d13; border-bottom:1px solid var(--line);
+}
+.gfx text{font-family:'JetBrains Mono',monospace; fill:#93a7bc;}
+.gfx .lbl{font-size:8px; letter-spacing:.1em;}
+.gfx .big{font-size:11px; font-weight:600; fill:var(--cyan);}
+.gfx .dim{font-size:9px; fill:#3c4a59; letter-spacing:.18em;}
+.gfx .grid line, .gfx .grid circle{stroke:rgba(56,220,240,.16); stroke-width:.7; fill:none;}
+
+/* 고도 뷰 */
+.gfx .alt-line{
+  stroke:var(--cyan); stroke-width:1; stroke-dasharray:3 3;
+  animation:dashflow 1s linear infinite;
+}
+@keyframes dashflow{to{stroke-dashoffset:-12}}
+.gfx .body{fill:var(--cyan);}
+.gfx .arm{fill:var(--cyan); opacity:.6;}
+.gfx .rotor{fill:var(--cyan); animation:rotor .4s ease-in-out infinite;}
+@keyframes rotor{0%,100%{opacity:.2}50%{opacity:.7}}
+
+/* 레이더 */
+.gfx .sweep{
+  transform-box:view-box; transform-origin:100px 59px;
+  animation:sweep 4s linear infinite;
+}
+@keyframes sweep{to{transform:rotate(360deg)}}
+.gfx .sweep line{stroke:var(--cyan); stroke-width:1.2; opacity:.5;}
+.gfx .craft{fill:var(--amber);}
+.gfx .home{fill:none; stroke:var(--cyan); stroke-width:1;}
+.gfx .home-r{fill:none; stroke:var(--cyan); stroke-width:.7; opacity:.35;}
+
+/* 배터리 */
+.gfx .shell{fill:none; stroke:var(--line-hot); stroke-width:1.2;}
+.gfx .cap{fill:var(--line-hot);}
+.gfx .cell{fill:#1c2733;}
+.gfx .cell.cy{fill:var(--cyan);}
+.gfx .cell.am{fill:var(--amber);}
+.gfx .cell.rd{fill:var(--red);}
+.gfx .cell.lowpulse{animation:bp .9s infinite;}
+
+@media (prefers-reduced-motion: reduce){
+  .gfx *{animation:none !important;}
+}
 
 /* ---------- 수신 로그 ---------- */
 .rx{border:1px solid var(--line); border-radius:3px; background:var(--panel); overflow:hidden;}
@@ -533,16 +582,28 @@ def pretty_map_name(name):
         return name
 
 
-def panel(title, rows):
-    """rows: [(라벨, 값, 색클래스)] — 색클래스는 "", "cy", "am" """
-    body = "".join(
+def _rows_html(rows):
+    return "".join(
         f'<div class="row"><span class="k">{k}</span>'
         f'<span class="v {c}">{v}</span></div>'
         for k, v, c in rows
     )
+
+
+def panel(title, rows):
+    """rows: [(라벨, 값, 색클래스)] — 색클래스는 "", "cy", "am" """
+    head = f'<div class="pnl-h">{title}</div>' if title else ""
     st.markdown(
-        f'<div class="pnl"><div class="pnl-h">{title}</div>'
-        f'<div class="pnl-b">{body}</div></div>',
+        f'<div class="pnl">{head}'
+        f'<div class="pnl-b">{_rows_html(rows)}</div></div>',
+        unsafe_allow_html=True)
+
+
+def panel_gfx(title, gfx, rows):
+    """상단에 그래픽이 붙은 panel()"""
+    st.markdown(
+        f'<div class="pnl"><div class="pnl-h">{title}</div>{gfx}'
+        f'<div class="pnl-b">{_rows_html(rows)}</div></div>',
         unsafe_allow_html=True)
 
 
@@ -551,6 +612,134 @@ def empty_state(icon, text):
         f'<div class="empty"><div class="ic">{icon}</div>'
         f'<div class="tx">{text}</div></div>',
         unsafe_allow_html=True)
+
+
+def lvl(ok, warn):
+    """정상/주의/위험을 panel() 색 클래스로"""
+    return "cy" if ok else ("am" if warn else "rd")
+
+
+_DIRS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+
+
+def compass(deg):
+    return _DIRS[int((deg + 22.5) % 360 // 45)]
+
+
+def fmt_age(a):
+    return "—" if a is None else f"{a:.1f}s"
+
+
+def age_lvl(a, limit):
+    return lvl(a is not None and a < limit, a is not None and a < limit * 3)
+
+
+# ---------- 상태 그래픽 ----------
+
+_SVG = ('<svg class="gfx" viewBox="0 0 200 118" '
+        'preserveAspectRatio="xMidYMid meet">{}</svg>')
+
+
+def _phase(period):
+    """음수 delay로 애니메이션 위상을 벽시계에 고정한다.
+    fragment가 0.5초마다 DOM을 새로 그려도 이어지는 것처럼 보인다."""
+    return f"animation-delay:-{time.time() % period:.2f}s;"
+
+
+def _gfx_empty(text):
+    return _SVG.format(
+        f'<text x="100" y="63" text-anchor="middle" class="dim">{text}</text>')
+
+
+def gfx_altitude(agl, target):
+    """기체가 그리드 바닥 위로 떠오르고, 점선으로 고도를 표시"""
+    if agl is None:
+        return _gfx_empty("NO FIX")
+
+    ratio = max(0.0, min(1.3, agl / target if target else 0.0))
+    dy = 70 - 42 * (ratio / 1.3)       # 기체 y (70=지면, 28=최고)
+    k = 1 + 0.55 * (ratio / 1.3)       # 고도↑ → 그리드가 넓어짐
+    horizon = 74
+
+    g = [f'<line x1="100" y1="{horizon}" x2="{100 + u * 96 * k:.1f}" y2="118"/>'
+         for u in (-1, -0.55, 0, 0.55, 1)]
+    for t in (0.18, 0.38, 0.64, 1.0):
+        y, hw = horizon + 44 * t, 96 * k * t
+        g.append(f'<line x1="{100 - hw:.1f}" y1="{y:.1f}" '
+                 f'x2="{100 + hw:.1f}" y2="{y:.1f}"/>')
+
+    return _SVG.format(
+        f'<g class="grid">{"".join(g)}</g>'
+        f'<line class="alt-line" x1="100" y1="{dy + 7:.1f}" x2="100" y2="{horizon}" '
+        f'style="{_phase(1.0)}"/>'
+        f'<g transform="translate(100,{dy:.1f})">'
+        f'<rect x="-16" y="-1" width="32" height="2" class="arm"/>'
+        f'<rect x="-6" y="-4" width="12" height="7" rx="1" class="body"/>'
+        f'<ellipse cx="-16" cy="-3" rx="7.5" ry="1.8" class="rotor" '
+        f'style="{_phase(0.4)}"/>'
+        f'<ellipse cx="16" cy="-3" rx="7.5" ry="1.8" class="rotor" '
+        f'style="{_phase(0.4)}"/></g>'
+        f'<text x="108" y="{(dy + horizon) / 2 + 4:.1f}" class="big">{agl} m</text>')
+
+
+def gfx_radar(dist, bearing, heading):
+    """이륙지점을 중심으로 기체 위치를 방위·거리로 표시"""
+    if dist is None:
+        return _gfx_empty("NO FIX")
+
+    span = 1600
+    for s in (25, 50, 100, 200, 400, 800):
+        if s >= max(dist, 8) * 1.15:
+            span = s
+            break
+
+    cx, cy, rmax = 100, 59, 52
+    rings = "".join(f'<circle cx="{cx}" cy="{cy}" r="{rmax * f:.1f}"/>'
+                    for f in (0.33, 0.66, 1.0))
+    cross = (f'<line x1="{cx - rmax}" y1="{cy}" x2="{cx + rmax}" y2="{cy}"/>'
+             f'<line x1="{cx}" y1="{cy - rmax}" x2="{cx}" y2="{cy + rmax}"/>')
+
+    r = min(rmax, dist / span * rmax)
+    a = math.radians(bearing)
+    px, py = cx + math.sin(a) * r, cy - math.cos(a) * r
+
+    return _SVG.format(
+        f'<g class="grid">{rings}{cross}</g>'
+        f'<g class="sweep" style="{_phase(4.0)}">'
+        f'<line x1="{cx}" y1="{cy}" x2="{cx}" y2="{cy - rmax}"/></g>'
+        f'<circle cx="{cx}" cy="{cy}" r="3" class="home"/>'
+        f'<circle cx="{cx}" cy="{cy}" r="6" class="home-r"/>'
+        f'<g transform="translate({px:.1f},{py:.1f}) rotate({heading:.0f})">'
+        f'<polygon points="0,-5 3.4,4 0,2 -3.4,4" class="craft"/></g>'
+        f'<text x="196" y="114" text-anchor="end" class="lbl">R {span} m</text>')
+
+
+def gfx_battery(pct, volt):
+    """100/75/50/25/0 기준으로 4칸이 한 칸씩 줄어든다"""
+    filled = max(0, min(4, math.ceil(pct / 25)))
+    color = "cy" if pct >= 50 else ("am" if pct >= 25 else "rd")
+    x0, y0, w, h, gap = 40, 38, 27, 34, 4
+
+    cells = []
+    for i in range(4):
+        x = x0 + i * (w + gap)
+        if i < filled:
+            low = " lowpulse" if pct <= 25 else ""
+            style = f' style="{_phase(0.9)}"' if low else ""
+            cells.append(f'<rect x="{x}" y="{y0}" width="{w}" height="{h}" '
+                         f'rx="2" class="cell {color}{low}"{style}/>')
+        else:
+            cells.append(f'<rect x="{x}" y="{y0}" width="{w}" height="{h}" '
+                         f'rx="2" class="cell"/>')
+
+    return _SVG.format(
+        f'<rect x="{x0 - 5}" y="{y0 - 5}" width="{4 * w + 3 * gap + 10}" '
+        f'height="{h + 10}" rx="3" class="shell"/>'
+        f'<rect x="{x0 + 4 * w + 3 * gap + 6}" y="{y0 + h / 2 - 7}" '
+        f'width="5" height="14" rx="1.5" class="cap"/>'
+        f'{"".join(cells)}'
+        f'<text x="100" y="98" text-anchor="middle" class="big">'
+        f'{volt:.1f} V · {pct}%</text>')
 
 
 def render_cap(w):
@@ -1005,27 +1194,77 @@ with tab_3d:
             empty_state("◈", "GLB 모델을 업로드하거나 복원을 실행하세요")
 
 
-# ===== 4. 드론 상태 =====
+# ===== 5. 드론 상태 =====
 with tab_status:
-    c1, c2, c3 = st.columns(3, gap="medium")
-    with c1:
-        panel("FLIGHT", [("고도", "—", ""), ("대지속도", "—", ""),
-                         ("헤딩", "—", "")])
-    with c2:
-        panel("ATTITUDE", [("ROLL", "—", ""), ("PITCH", "—", ""),
-                           ("YAW", "—", "")])
-    with c3:
-        panel("SYSTEM", [("GPS 위성", "—", ""), ("배터리", "—", ""),
-                         ("링크 품질", "LINKED" if alive else "—",
-                          "cy" if alive else "")])
-
-    st.markdown("""
+    st.markdown(f"""
     <div class="vp-bar">
       <span class="tag">◉ TELEMETRY</span>
-      <span>MAVLINK / PIXHAWK</span>
-      <span class="sp">EXTERNAL</span>
+      <span>CRSF · {'DUMMY' if tm.USE_DUMMY else 'POCKET / USB-VCP'}</span>
+      <span class="sp">0x02 · 0x08 · 0x14</span>
     </div>""", unsafe_allow_html=True)
-    empty_state("◉", "비행 텔레메트리는 QGroundControl에서 확인합니다")
+
+    @st.fragment(run_every=0.5)
+    def telemetry_view():
+        """스크립트 전체가 아니라 이 함수만 0.5초마다 재실행된다"""
+        snap = tm.get_telemetry()
+        g, b, k = snap["gps"], snap["battery"], snap["link"]
+        fix = g["sats"] > 0
+        status = tm.link_status(snap)
+
+        agl = g["alt_m"] - tm.HOME_ALT_M if fix else None    # 해발 → 지상고
+        dist = tm.distance_from_home(snap)
+        target_m = rm.TARGET_ALT_CM / 100                    # 매핑 기준과 동일
+
+        c1, c2, c3 = st.columns(3, gap="medium")
+        with c1:
+            panel_gfx("FLIGHT", gfx_altitude(agl, target_m), [
+                ("고도 (AGL)",
+                 f"{agl} m" if agl is not None else "—",
+                 lvl(agl is not None and abs(agl - target_m) <= target_m * 0.10,
+                     agl is not None and abs(agl - target_m) <= target_m * 0.25)),
+                ("대지속도", f"{g['speed_kmh']:.1f} km/h" if fix else "—", ""),
+                ("헤딩",
+                 f"{g['heading']:.0f}° {compass(g['heading'])}" if fix else "—",
+                 ""),
+            ])
+        with c2:
+            panel_gfx("POSITION",
+                      gfx_radar(dist, tm.bearing_from_home(snap), g["heading"]), [
+                ("위도", f"{g['lat']:.6f}" if fix else "—", "" if fix else "dim"),
+                ("경도", f"{g['lon']:.6f}" if fix else "—", "" if fix else "dim"),
+                ("이륙지점 거리",
+                 f"{dist:.0f} m" if dist is not None else "—", ""),
+            ])
+        with c3:
+            panel_gfx("SYSTEM",
+                      gfx_battery(b["remaining_pct"], b["voltage"]), [
+                ("GPS 위성", f"{g['sats']}" if fix else "NO FIX",
+                 lvl(g["sats"] >= 10, g["sats"] >= rm.MIN_SATS)),
+                ("배터리", f"{b['voltage']:.1f} V · {b['remaining_pct']}%",
+                 lvl(b["remaining_pct"] >= 40, b["remaining_pct"] >= 20)),
+                ("링크", status, lvl(status == "OK", status == "WEAK")),
+            ])
+
+        panel("LINK QUALITY", [
+            ("업링크 LQ", f"{k['up_lq']} %",
+             lvl(k["up_lq"] >= 80, k["up_lq"] >= 50)),
+            ("업링크 RSSI", f"{k['up_rssi1']} dBm",
+             lvl(k["up_rssi1"] >= -85, k["up_rssi1"] >= -100)),
+            ("업링크 SNR", f"{k['up_snr']} dB", ""),
+            ("송신 출력", f"idx {k['tx_power_idx']}", ""),
+        ])
+
+        # 어느 프레임이 막혔는지 여기서 바로 보인다
+        a_gps, a_bat, a_lnk = (tm.age(snap, x)
+                               for x in ("gps", "battery", "link"))
+        with st.expander("DATA AGE"):
+            panel("", [
+                ("GPS (0x02)", fmt_age(a_gps), age_lvl(a_gps, 2.0)),
+                ("BATTERY (0x08)", fmt_age(a_bat), age_lvl(a_bat, 2.0)),
+                ("LINK (0x14)", fmt_age(a_lnk), age_lvl(a_lnk, 0.3)),
+            ])
+
+    telemetry_view()
 
 
 # ---------- 프리뷰 루프 ----------
