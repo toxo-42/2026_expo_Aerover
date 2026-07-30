@@ -1,12 +1,22 @@
 # dashboard.py
 # 실행: streamlit run dashboard.py
 
-import os, io, math, socket, struct, time, threading, contextlib, base64
-import cv2, numpy as np
+import base64
+import contextlib
+import io
+import math
+import os
+import socket
+import struct
+import threading
+import time
+
+import cv2
+import numpy as np
 import streamlit as st
 
-import run_mapping as rm
 import run_detect as det
+import run_mapping as rm
 import telemetry as tm
 
 PI_IP = "192.168.137.6"
@@ -459,8 +469,8 @@ def stream_worker(state):
 def browser_alive():
     """브라우저 세션이 살아 있는지 확인. 닫히면 False."""
     try:
-        from streamlit.runtime.scriptrunner import get_script_run_ctx
         from streamlit.runtime import get_instance
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
         ctx = get_script_run_ctx()
         if ctx is None:
             return False
@@ -1210,6 +1220,10 @@ with tab_status:
         g, b, k = snap["gps"], snap["battery"], snap["link"]
         fix = g["sats"] > 0
         status = tm.link_status(snap)
+
+        err = tm.last_error(snap)
+        if err:
+            st.error(f"텔레메트리 수신 오류 — {err}")
 
         agl = g["alt_m"] - tm.HOME_ALT_M if fix else None    # 해발 → 지상고
         dist = tm.distance_from_home(snap)
