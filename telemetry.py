@@ -208,22 +208,36 @@ def _u24(b):
 
 def _parse_gps(p):
     lat, lon, spd, hdg, alt, sats = struct.unpack(">iiHHHB", p)
-    return dict(lat=lat / 1e7, lon=lon / 1e7, speed_kmh=spd / 10,
-                heading=hdg / 100, alt_m=alt - 1000, sats=sats)
+    return dict(
+        lat=lat / 1e7,
+        lon=lon / 1e7,
+        speed_kmh=spd / 10,
+        heading=hdg / 100,
+        alt_m=alt - 1000,
+        sats=sats,
+    )
 
 
 def _parse_battery(p):
     v, a = struct.unpack(">HH", p[0:4])
-    return dict(voltage=v / 10, current=a / 10,
-                used_mah=_u24(p[4:7]), remaining_pct=p[7])
+    return dict(
+        voltage=v / 10, current=a / 10, used_mah=_u24(p[4:7]), remaining_pct=p[7]
+    )
 
 
 def _parse_link(p):
-    return dict(up_rssi1=-p[0], up_rssi2=-p[1], up_lq=p[2],
-                up_snr=struct.unpack("b", p[3:4])[0],
-                antenna=p[4], rf_mode=p[5], tx_power_idx=p[6],
-                down_rssi=-p[7], down_lq=p[8],
-                down_snr=struct.unpack("b", p[9:10])[0])
+    return dict(
+        up_rssi1=-p[0],
+        up_rssi2=-p[1],
+        up_lq=p[2],
+        up_snr=struct.unpack("b", p[3:4])[0],
+        antenna=p[4],
+        rf_mode=p[5],
+        tx_power_idx=p[6],
+        down_rssi=-p[7],
+        down_lq=p[8],
+        down_snr=struct.unpack("b", p[9:10])[0],
+    )
 
 
 _HANDLERS = {
@@ -246,12 +260,12 @@ def _frames(buf):
             continue
         if len(buf) < ln + 2:
             return  # 아직 덜 받았다
-        frame = bytes(buf[2:2 + ln])  # TYPE..CRC
+        frame = bytes(buf[2 : 2 + ln])  # TYPE..CRC
         if _crc8(frame[:-1]) != frame[-1]:
             del buf[0]  # 싱크 오류 — 1바이트만 밀어야 진짜 시작점을 안 놓친다
             continue
         ftype, payload = frame[0], frame[1:-1]
-        del buf[:ln + 2]
+        del buf[: ln + 2]
         h = _HANDLERS.get(ftype)
         if h and len(payload) == h[1]:
             yield h[0], h[2](payload)
