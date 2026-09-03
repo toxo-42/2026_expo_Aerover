@@ -6,7 +6,7 @@ import threading
 import time
 
 """ ===== 실기 연결 시 고칠 곳은 여기 두 줄 + 아래 기체 제원 ===== """
-USE_DUMMY = True  # 실제 환경에서는 False로 설정
+USE_DUMMY = False  # 실제 환경에서는 False로 설정
 SERIAL_PORT = "/dev/tty.usbmodem0001"  # 맥: ls /dev/tty.usbmodem* / 윈도우: "COM5"
 
 """ 드론 텔레메트리 설정 (나중에 실제 기체에 맞게 수정해야함)"""

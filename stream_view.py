@@ -1,10 +1,13 @@
 import socket, struct, cv2, numpy as np, time, os
 from datetime import datetime
 
+# ===== 경로 설정 (run_mapping.py 와 동일한 상대경로 기준) =====
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SAVE_DIR = os.path.join(BASE_DIR, "received")   # 저장 폴더 (코드 위치 기준)
+
 PI_IP = "192.168.137.6"
 PORT = 5001
-SAVE_DIR = r"D:\Program\Code\Drone\received"   # 저장 폴더
-INTERVAL = 3.0                                 # 저장 주기(초)
+INTERVAL = 3.0                                  # 저장 주기(초)
 
 os.makedirs(SAVE_DIR, exist_ok=True)
 

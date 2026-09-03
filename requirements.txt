@@ -1,0 +1,46 @@
+# AeroVer 지상국 (Windows PC) 의존성
+# 버전은 현재 동작 중인 .venv 에서 그대로 뽑았음 (2026-08-28 기준)
+#
+#   설치:  python -m venv .venv
+#          .venv\Scripts\activate
+#          pip install -r requirements.txt
+
+# --- 필수 ---
+streamlit==1.60.0
+numpy==2.5.1
+
+# ArUco 마커 검출(run_mapping.detect_aruco)에 contrib 모듈이 필요하다.
+# 주의: opencv-python 과 opencv-contrib-python 을 함께 설치하면 충돌한다.
+#       현재 .venv 에는 둘 다 깔려 있으므로, 새로 만들 때는 contrib 하나만 설치할 것.
+opencv-contrib-python==5.0.0.93
+
+# 텔레메트리 시리얼 수신 (telemetry.py)
+# 현재 .venv 에 설치돼 있지 않다. USE_DUMMY=False 로 두면 ModuleNotFoundError 가 난다.
+pyserial==3.5
+
+# --- 객체 탐지 (run_detect.detect() 구현 시) ---
+# 이미 설치돼 있으나 코드에서 아직 호출하지 않는다.
+ultralytics==8.4.113
+torch==2.13.0
+torchvision==0.28.0
+
+# 항공 사진의 작은 객체 검출률을 높이는 타일 분할 (run_detect.py 82~86줄 주석 참고)
+sahi==0.12.2
+
+
+# ============================================================
+# 라즈베리파이 쪽 (pi_stream.py) — pip 아님, apt 로 설치
+# ============================================================
+#   sudo apt install -y python3-picamera2
+#
+# picamera2 / libcamera 는 시스템 패키지로 설치해야 한다.
+# 가상환경에서 쓰려면 --system-site-packages 옵션으로 만들 것.
+
+
+# ============================================================
+# .venv 에 있으나 코드에서 사용하지 않는 것들 (참고)
+# ============================================================
+# folium, pyproj, shapely   — 지도/좌표 라이브러리. 좌표 변환용으로 설치한 듯하나 미사용
+# matplotlib, polars        — 미사용
+# pandas, pyarrow, altair,
+# pydeck, gitpython 등       — streamlit 이 자동으로 끌고 오는 의존성

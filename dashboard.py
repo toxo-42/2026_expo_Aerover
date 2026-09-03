@@ -21,10 +21,11 @@ import telemetry as tm
 
 PI_IP = "192.168.137.6"
 PORT = 5001
-SAVE_DIR = r"D:\Program\Code\Drone\received"
-RECON_DIR = r"D:\Program\Code\Drone\recon3d"
-ARCHIVE_DIR = r"D:\Program\Code\Drone\maps"        # 스티칭 결과 보관
-TRASH_DIR = r"D:\Program\Code\Drone\maps\_trash"   # 삭제된 맵 (복원 가능)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SAVE_DIR = os.path.join(BASE_DIR, "received")
+RECON_DIR = os.path.join(BASE_DIR, "recon3d")
+ARCHIVE_DIR = os.path.join(BASE_DIR, "maps")        # 스티칭 결과 보관
+TRASH_DIR = os.path.join(ARCHIVE_DIR, "_trash")     # 삭제된 맵 (복원 가능)
 DEFAULT_INTERVAL = 3.0
 
 st.set_page_config(page_title="AeroVer", layout="wide",

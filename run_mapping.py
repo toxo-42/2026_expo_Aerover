@@ -8,6 +8,17 @@ SRC_DIR = os.path.join(BASE_DIR, "received")        # 촬영 원본
 DST_DIR = os.path.join(BASE_DIR, "filtered")        # 필터 통과 이미지
 OUT_PATH = os.path.join(BASE_DIR, "stitched_map.jpg")  # 최종 결과
 
+# ===== 필터 on/off 스위치 =====
+# 텔레메트리 json 이 없으면 알아서 건너뛰므로 켜둬도 무방하지만,
+# 실내 테스트처럼 조건이 안 맞을 때는 개별로 끌 수 있게 분리했다.
+FILTER_ENABLED = True         # False = 전부 통과 (필터 우회)
+CHECK_BLUR = True             # 흔들림/초점
+CHECK_ALT = True              # 고도 (json 필요)
+CHECK_TILT = True             # roll/pitch (json 필요)
+CHECK_GPS = False             # GPS fix/위성 (실내는 무조건 탈락하므로 기본 off)
+
+AUTO_RELAX = True             # 통과 0장이면 블러 기준을 자동 완화해 재시도
+
 # ===== 필터 파라미터 =====
 TARGET_ALT_CM = 1500          # 목표 고도 (cm) — 데모 조건에 맞게 수정
 ALT_TOLERANCE = 0.10          # ±10%
@@ -50,15 +61,47 @@ def natural_key(path):
     return (int(digits) if digits else 0, base)
 
 
-def check_frame(img, meta, prev_alt):
+def imread_safe(path):
+    """한글 경로에서도 읽히도록 numpy 버퍼 경유"""
+    try:
+        buf = np.fromfile(path, dtype=np.uint8)
+        return cv2.imdecode(buf, cv2.IMREAD_COLOR)
+    except Exception:
+        return None
+
+
+def scan_frames(paths):
+    """모든 프레임의 측정값을 먼저 수집한다 (판정은 나중)"""
+    records = []
+    for p in paths:
+        img = imread_safe(p)
+        if img is None:
+            records.append({"path": p, "name": os.path.basename(p),
+                            "loaded": False})
+            continue
+        records.append({
+            "path": p,
+            "name": os.path.basename(p),
+            "loaded": True,
+            "blur": blur_score(img),
+            "meta": load_meta(p),
+        })
+    return records
+
+
+def judge(rec, prev_alt, blur_thr):
+    """측정값 -> 통과 여부 + 탈락 사유 코드"""
     reasons = []
 
-    bs = blur_score(img)
-    if bs < BLUR_THRESHOLD:
-        reasons.append(f"블러 (score={bs:.1f})")
+    if not rec["loaded"]:
+        return False, ["로드 실패"], prev_alt
 
+    if CHECK_BLUR and rec["blur"] < blur_thr:
+        reasons.append(f"블러 ({rec['blur']:.1f} < {blur_thr:.1f})")
+
+    meta = rec["meta"]
     if meta is None:
-        return len(reasons) == 0, reasons, None
+        return len(reasons) == 0, reasons, prev_alt
 
     alt = meta.get("alt_cm")
     roll = meta.get("roll")
@@ -66,25 +109,67 @@ def check_frame(img, meta, prev_alt):
     sats = meta.get("sats", 0)
     fix = meta.get("fix", 0)
 
-    if alt is not None:
+    if CHECK_ALT and alt is not None:
         lo = TARGET_ALT_CM * (1 - ALT_TOLERANCE)
         hi = TARGET_ALT_CM * (1 + ALT_TOLERANCE)
         if not (lo <= alt <= hi):
-            reasons.append(f"고도 이탈 ({alt}cm)")
+            reasons.append(f"고도 이탈 ({alt}cm, 허용 {lo:.0f}~{hi:.0f})")
         if prev_alt is not None and abs(alt - prev_alt) > MAX_ALT_DELTA_CM:
             reasons.append(f"고도 급변 (Δ{abs(alt - prev_alt)}cm)")
 
-    if roll is not None and abs(roll) > MAX_TILT_DEG:
-        reasons.append(f"roll 초과 ({roll:.1f}도)")
-    if pitch is not None and abs(pitch) > MAX_TILT_DEG:
-        reasons.append(f"pitch 초과 ({pitch:.1f}도)")
+    if CHECK_TILT:
+        if roll is not None and abs(roll) > MAX_TILT_DEG:
+            reasons.append(f"roll 초과 ({roll:.1f}도)")
+        if pitch is not None and abs(pitch) > MAX_TILT_DEG:
+            reasons.append(f"pitch 초과 ({pitch:.1f}도)")
 
-    if fix < 2:
-        reasons.append("GPS fix 없음")
-    elif sats < MIN_SATS:
-        reasons.append(f"위성 부족 ({sats}개)")
+    if CHECK_GPS:
+        if fix < 2:
+            reasons.append("GPS fix 없음")
+        elif sats < MIN_SATS:
+            reasons.append(f"위성 부족 ({sats}개)")
 
-    return len(reasons) == 0, reasons, alt
+    return len(reasons) == 0, reasons, (alt if alt is not None else prev_alt)
+
+
+def evaluate(records, blur_thr):
+    """전체 판정 -> (통과 레코드, 사유별 집계, 상세 로그)"""
+    passed, tally, lines = [], {}, []
+    prev_alt = None
+
+    for rec in records:
+        ok, reasons, prev_alt = judge(rec, prev_alt, blur_thr)
+        if ok:
+            passed.append(rec)
+            bs = rec.get("blur")
+            lines.append(f"[O] {rec['name']}"
+                         + (f"  (선명도 {bs:.1f})" if bs is not None else ""))
+        else:
+            lines.append(f"[X] {rec['name']} - {', '.join(reasons)}")
+            for r in reasons:
+                key = r.split(" (")[0]
+                tally[key] = tally.get(key, 0) + 1
+
+    return passed, tally, lines
+
+
+def prepare_dst():
+    if os.path.isdir(DST_DIR):
+        for f in glob.glob(os.path.join(DST_DIR, "*")):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+        return True
+
+    for _ in range(5):
+        try:
+            os.makedirs(DST_DIR, exist_ok=True)
+            return True
+        except PermissionError:
+            time.sleep(0.2)
+    print(f"[!] 출력 폴더를 만들지 못했습니다: {DST_DIR}")
+    return False
 
 
 def run_filter():
@@ -96,61 +181,104 @@ def run_filter():
         print(f"[!] 원본 폴더가 없습니다: {SRC_DIR}")
         return []
 
-    # 재실행 대비 초기화 (Windows는 삭제가 비동기라 재생성이 실패할 수 있음)
-    if os.path.isdir(DST_DIR):
-        for f in glob.glob(os.path.join(DST_DIR, "*")):
-            try:
-                os.remove(f)
-            except OSError:
-                pass
-    else:
-        for _ in range(5):
-            try:
-                os.makedirs(DST_DIR, exist_ok=True)
-                break
-            except PermissionError:
-                time.sleep(0.2)
-
     paths = sorted(glob.glob(os.path.join(SRC_DIR, "*.jpg")), key=natural_key)
+    paths += sorted(glob.glob(os.path.join(SRC_DIR, "*.png")), key=natural_key)
     if not paths:
         print(f"[!] {SRC_DIR}에 이미지가 없습니다.")
         return []
 
-    print(f"[*] 원본 {len(paths)}장 발견\n")
+    if not prepare_dst():
+        return []
 
-    prev_alt = None
-    passed = []
+    print(f"[*] 원본 {len(paths)}장 발견")
 
-    for p in paths:
-        img = cv2.imread(p)
-        if img is None:
-            print(f"[X] {os.path.basename(p)} - 로드 실패")
-            continue
+    # --- 측정 ---
+    records = scan_frames(paths)
 
-        meta = load_meta(p)
-        ok, reasons, alt = check_frame(img, meta, prev_alt)
+    n_broken = sum(1 for r in records if not r["loaded"])
+    n_meta = sum(1 for r in records if r.get("meta") is not None)
+    blurs = [r["blur"] for r in records if r["loaded"]]
 
-        if ok:
-            dst = os.path.join(DST_DIR, os.path.basename(p))
+    print(f"[*] 로드 성공 {len(blurs)}장 / 실패 {n_broken}장")
+    print(f"[*] 텔레메트리 메타(json) 보유 {n_meta}/{len(records)}장", end="")
+    if n_meta == 0:
+        print(" — 고도·기울기·GPS 검사는 자동 생략됩니다")
+    else:
+        print()
+
+    if blurs:
+        arr = np.array(blurs)
+        print(f"[*] 선명도(Laplacian var) 최소 {arr.min():.1f} / "
+              f"중앙값 {np.median(arr):.1f} / 최대 {arr.max():.1f} "
+              f"(기준 {BLUR_THRESHOLD:.1f})")
+
+    active = [n for n, on in [("블러", CHECK_BLUR), ("고도", CHECK_ALT),
+                              ("기울기", CHECK_TILT), ("GPS", CHECK_GPS)] if on]
+    print(f"[*] 활성 검사: {', '.join(active) if active else '없음'}"
+          f"{'' if FILTER_ENABLED else '  (FILTER_ENABLED=False → 전부 통과)'}\n")
+
+    # --- 판정 ---
+    if not FILTER_ENABLED:
+        passed = [r for r in records if r["loaded"]]
+        tally, lines = {}, [f"[O] {r['name']}" for r in passed]
+        thr_used = None
+    else:
+        thr_used = BLUR_THRESHOLD
+        passed, tally, lines = evaluate(records, thr_used)
+
+        # 전멸했는데 원인이 블러뿐이라면 기준을 실제 분포에 맞춰 자동 완화
+        if not passed and AUTO_RELAX and blurs and set(tally) <= {"블러"}:
+            relaxed = max(float(np.percentile(blurs, 25)) * 0.9, 0.5)
+            print(f"[!] 통과 0장 — 블러 기준을 {BLUR_THRESHOLD:.1f} → "
+                  f"{relaxed:.1f}로 자동 완화해 재판정합니다")
+            print(f"    (영구 적용하려면 BLUR_THRESHOLD 를 {relaxed:.1f}로 수정)\n")
+            thr_used = relaxed
+            passed, tally, lines = evaluate(records, thr_used)
+
+    for ln in lines:
+        print(ln)
+
+    # --- 복사 ---
+    out_paths = []
+    for rec in passed:
+        p = rec["path"]
+        dst = os.path.join(DST_DIR, os.path.basename(p))
+        try:
             shutil.copy(p, dst)
-            mp = os.path.splitext(p)[0] + ".json"
-            if os.path.exists(mp):
-                shutil.copy(mp, os.path.join(DST_DIR, os.path.basename(mp)))
-            passed.append(dst)
-            print(f"[O] {os.path.basename(p)}")
-        else:
-            print(f"[X] {os.path.basename(p)} - {', '.join(reasons)}")
+        except OSError as e:
+            print(f"[!] 복사 실패 {rec['name']}: {e}")
+            continue
+        mp = os.path.splitext(p)[0] + ".json"
+        if os.path.exists(mp):
+            shutil.copy(mp, os.path.join(DST_DIR, os.path.basename(mp)))
+        out_paths.append(dst)
 
-        if alt is not None:
-            prev_alt = alt
+    # --- 요약 ---
+    print(f"\n총 {len(records)}장 중 {len(out_paths)}장 통과, "
+          f"{len(records) - len(out_paths)}장 제외")
 
-    print(f"\n총 {len(paths)}장 중 {len(passed)}장 통과, {len(paths) - len(passed)}장 제외")
+    if tally:
+        print("탈락 사유:")
+        for k, v in sorted(tally.items(), key=lambda x: -x[1]):
+            print(f"  - {k}: {v}장")
 
-    if len(passed) < len(paths) * 0.5:
-        print("[!] 통과율이 낮습니다. BLUR_THRESHOLD 값을 낮춰보세요.")
+    if not out_paths:
+        print("\n[!] 통과한 프레임이 0장입니다. 아래 순서로 확인하세요:")
+        if n_broken == len(records):
+            print("    1) 이미지가 전부 로드 실패 — 파일이 깨졌거나 경로에 문제가 있습니다")
+        elif "블러" in tally:
+            print("    1) 렌즈 초점을 다시 맞추세요 (수동 포커스 C/CS 마운트)")
+            print("    2) BLUR_THRESHOLD 를 낮추거나 CHECK_BLUR = False 로 우회")
+        if "고도 이탈" in tally:
+            print(f"    - TARGET_ALT_CM({TARGET_ALT_CM}) 이 실제 촬영 고도와 다릅니다")
+        if "GPS fix 없음" in tally:
+            print("    - 실내라면 CHECK_GPS = False 로 두세요")
+        print("    * 급할 땐 FILTER_ENABLED = False 로 필터를 통째로 우회할 수 있습니다")
+    elif len(out_paths) < len(records) * 0.5:
+        print("[!] 통과율이 50% 미만입니다. 촬영 조건 또는 기준값을 재검토하세요.")
 
     print()
-    return passed
+    return out_paths
 
 
 # ========== 스티칭 ==========
@@ -212,9 +340,12 @@ def stitch_sequential(paths):
 
     imgs = []
     for p in paths:
-        img = cv2.imread(p)
+        img = imread_safe(p)
         if img is not None:
             imgs.append((os.path.basename(p), img))
+
+    if len(imgs) < 2:
+        return None
 
     h, w = imgs[0][1].shape[:2]
     canvas_w = int(w * CANVAS_SCALE)
@@ -270,7 +401,7 @@ def stitch_sequential(paths):
 
 def stitch_opencv(paths):
     """bundle adjustment + multi-band blending 을 포함한 정식 스티칭"""
-    imgs = [cv2.imread(p) for p in paths]
+    imgs = [imread_safe(p) for p in paths]
     imgs = [im for im in imgs if im is not None]
     if len(imgs) < 2:
         return None
