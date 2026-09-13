@@ -1,0 +1,24 @@
+# AeroVer 지상국 — 의존성 (pyproject.toml 과 같은 버전 고정)
+#
+# 기본은 uv 다:            uv sync && uv run python app.py
+# uv 가 없으면 pip 로:      python -m venv .venv
+#                          .venv\Scripts\activate        (윈도우)  /  source .venv/bin/activate  (맥·리눅스)
+#                          pip install -r requirements.txt
+#                          python app.py
+#
+# Python 3.12 ~ 3.14. 하한은 numpy·scipy, 상한은 PySide6.
+# 가상환경(.venv/)은 만든 컴퓨터 전용이라 저장소에 넣지 않는다 — 각자 위 명령으로 만든다.
+
+PySide6==6.11.2
+trimesh==5.1.0
+numpy==2.5.2
+pillow==12.3.0
+DracoPy==2.0.0                  # ODM 산출 GLB 는 Draco 압축 — 없으면 지오메트리가 안 읽힌다
+scipy==1.18.1                   # trimesh 법선 계산 가속
+opencv-python-headless==5.0.0.93  # 입력 검사 — 라플라시안 블러·ORB 매칭
+pyodm==1.5.13                   # NodeODM 제출·폴링
+pyserial==3.5                   # 텔레메트리 — CRSF over USB VCP
+pymavlink==2.4.49               # 파이와 UDP 로 이야기하는 MAVLink (제어 · FC 텔레메트리 중계)
+
+# 테스트
+pytest>=8
