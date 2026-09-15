@@ -6,7 +6,7 @@ import pytest
 
 pytest.importorskip("pyodm")
 
-from pyodm.exceptions import OdmError, TaskFailedError    # noqa: E402
+from pyodm.exceptions import NodeResponseError, OdmError, TaskFailedError    # noqa: E402
 from pyodm.types import TaskStatus                        # noqa: E402
 
 from src.core import odm                                  # noqa: E402
@@ -107,6 +107,23 @@ def test_resume_skips_submit_and_treats_node_cancel_as_failure(tmp_path):
     node = FakeNode(timeline=[TaskStatus.CANCELED])
     job, sink = _job(node, tmp_path, uuid="deadbeef")
     with pytest.raises(TaskFailedError):
+        job.run()
+    assert node.created is None and sink.submitted == []
+
+
+@pytest.mark.parametrize("message, expected", [
+    ("deadbeef not found", TaskFailedError),       # 노드가 정리한 작업 — 기록을 지워야 한다
+    ("Invalid token", NodeResponseError),          # 그 밖의 거절은 기록을 남긴다
+])
+def test_resume_of_task_missing_on_node(tmp_path, message, expected):
+    class GoneTask:
+        def info(self, with_output=None):
+            raise NodeResponseError(message)
+
+    node = FakeNode()
+    node.get_task = lambda uuid: GoneTask()
+    job, sink = _job(node, tmp_path, uuid="deadbeef")
+    with pytest.raises(expected):
         job.run()
     assert node.created is None and sink.submitted == []
 

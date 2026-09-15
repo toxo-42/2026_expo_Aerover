@@ -138,7 +138,15 @@ class OdmJob:
     def run(self) -> OdmResult:
         resumed = bool(self.uuid)
         self._task = self._node.get_task(self.uuid) if resumed else self._submit()
-        self.uuid = self._task.info().uuid
+        try:
+            self.uuid = self._task.info().uuid
+        except NodeResponseError as e:
+            # NodeODM 은 끝난 작업을 기본 2일(cleanup_tasks_after) 뒤 지운다. 컨테이너를
+            # 새로 만들어도 사라진다. 노드 쪽 취소처럼 TaskFailedError 로 올려야
+            # 회차 기록이 지워지고 다시 제출할 수 있다.
+            if resumed and "not found" in str(e):
+                raise TaskFailedError("기록된 작업이 노드에 없다 (정리됐거나 컨테이너가 바뀜)") from e
+            raise
         if not resumed:
             self._sink.on_submitted(self.uuid)
         self._wait(self._task, resumed)
