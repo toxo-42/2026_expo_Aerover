@@ -1,0 +1,27 @@
+[project]
+name = "aerover"
+version = "0.1.0"
+description = "AeroVer 재난 구조 드론 지상국 GUI"
+requires-python = ">=3.12,<3.15"     # 하한은 numpy·scipy, 상한은 PySide6
+dependencies = [
+    "PySide6==6.11.2",
+    "trimesh==5.1.0",
+    "numpy==2.5.2",
+    "pillow==12.3.0",
+    "DracoPy==2.0.0",                   # ODM 산출 GLB 는 Draco 압축이다. 없으면 지오메트리가 통째로 안 읽힌다
+    "scipy==1.18.1",                    # trimesh 법선 계산 가속 (없으면 느린 경로로 떨어진다)
+    "opencv-python-headless==5.0.0.93", # 입력 검사 — 라플라시안 블러·ORB 매칭. GUI 는 Qt 가 그리므로 headless 로 충분하다
+    "pyodm==1.5.13",                    # NodeODM 제출·폴링. REST 를 직접 두드리는 대신 이걸 쓴다
+    "pyserial==3.5",                    # 텔레메트리 — CRSF over USB VCP. 지연 import 라 없어도 앱은 뜬다
+    "pymavlink==2.4.49",                # 파이와 UDP 로 이야기하는 MAVLink (제어 · FC 텔레메트리 중계)
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]                     # uv sync 가 같이 깐다. 실행: uv run pytest
+
+[tool.uv]
+package = false     # 설치하지 않는다 — app.py 가 이 폴더의 src 를 바로 import 한다
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -p no:cacheprovider"

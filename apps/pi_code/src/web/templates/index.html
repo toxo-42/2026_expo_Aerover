@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AeroVer 드론 카메라</title>
+<style>
+  body { margin: 0; padding: 16px; font-family: system-ui, sans-serif; background: #111; color: #eee; }
+  img { width: 100%; max-width: 960px; display: block; background: #000; }
+  .bar { display: flex; gap: 8px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
+  button { font-size: 16px; padding: 8px 16px; }
+  #state.rec { color: #f44; font-weight: bold; }
+</style>
+</head>
+<body>
+  <img src="/stream.mjpg" alt="카메라 미리보기">
+  <div class="bar">
+    <button onclick="send('start')">녹화 시작</button>
+    <button onclick="send('stop')">녹화 종료</button>
+    <span id="state">확인 중...</span>
+  </div>
+  <pre id="msg"></pre>
+<script>
+const state = document.getElementById("state");
+const msg = document.getElementById("msg");
+
+function show(r) {
+  state.className = r.recording ? "rec" : "";
+  state.textContent = r.recording
+    ? `● 녹화 중 ${r.seconds}s  프레임 ${r.frames}/${r.expected}  결손 ${r.gaps}`
+    : "대기 중";
+}
+
+async function send(cmd) {
+  const r = await (await fetch(`/api/record/${cmd}`, {method: "POST"})).json();
+  msg.textContent = r.msg + (r.file ? `\n${r.file}` : "");
+  refresh();
+}
+
+async function refresh() {
+  try { show(await (await fetch("/api/status")).json()); }
+  catch (e) { state.textContent = "서버 연결 끊김"; }
+}
+
+refresh();
+setInterval(refresh, 1000);
+</script>
+</body>
+</html>

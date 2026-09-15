@@ -1,0 +1,19 @@
+# 라즈베리파이 드론 카메라 — pip 로 까는 것
+#
+# 파이(~/drone)에서 venv 를 새로 만들 때:
+#   sudo apt install python3-picamera2 python3-libcamera python3-pil python3-numpy python3-gpiozero
+#   sudo apt install python3-flask                 # web 명령만 필요
+#   python3 -m venv --system-site-packages droneenv   # apt 로 깐 picamera2 가 보여야 한다
+#   droneenv/bin/pip install -r requirements.txt
+#   droneenv/bin/python app.py stream
+#
+# picamera2 · libcamera · PIL · numpy · gpiozero · flask 는 pip 가 아니라 apt 패키지다.
+# pip 로 다시 깔면 libcamera 바인딩이 맞지 않아 카메라가 안 열린다.
+# 가상환경(droneenv/)은 파이 전용 바이너리라 저장소에 넣지 않는다.
+
+opencv-python==5.0.0.93
+pymavlink==2.4.49       # 지상국과 UDP 로 이야기하는 MAVLink (stream 명령)
+pyserial==3.5           # FC 의 MAVLink UART 중계 (DRONECAM_FC_SERIAL) 에만 필요
+
+# 테스트 (파이 밖에서도 돈다 — tests/fakes/ 의 가짜 picamera2 사용)
+pytest>=8
