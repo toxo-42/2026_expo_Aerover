@@ -46,7 +46,7 @@ droneenv/bin/python app.py stream
 
 | 환경변수 | 프로젝트 | 기본값 | 뜻 |
 |---|---|---|---|
-| `AEROVER_PI_HOST` | aerover | `192.168.137.70` | 파이 주소 |
+| `AEROVER_PI_HOST` | aerover | 의현 노트북(MUYAHOO): `192.168.137.70`, 인우 노트북(MUYAHO) : `192.168.137.68` | 파이 주소 |
 | `AEROVER_LINK` | aerover | `rtp` | 영상 링크 방식 `rtp`(UDP) / `tcp`(옛 방식) |
 | `AEROVER_MAVLINK_PORT` / `AEROVER_RTP_PORT` | aerover | `14550` / `5004` | 파이 MAVLink 포트 / 지상국이 RTP 를 받는 포트 |
 | `AEROVER_PI_PORT` | aerover | rtp 면 `14550`, tcp 면 `5001` | 화면 "호스트:포트" 칸 기본값 |
