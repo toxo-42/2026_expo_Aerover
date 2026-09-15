@@ -33,7 +33,7 @@ python -m pytest
 | 화면 | 상대 | 설정 이름 (환경변수) |
 |---|---|---|
 | 드론 상태 — 영상 · 수집 | 라즈베리파이 `app.py stream` — UDP: MAVLink 제어(14550) + RTP/JPEG 영상(5004). 옛 TCP 는 `AEROVER_LINK=tcp` | `PI_HOST`, `PI_PORT`, `RTP_PORT`, `LINK_MODE` (`AEROVER_PI_HOST`, `AEROVER_PI_PORT`, `AEROVER_RTP_PORT`, `AEROVER_LINK`) |
-| 드론 상태 — 계기판 | 조종기 USB (CRSF 텔레메트리 미러) | `SERIAL_PORT` (`AEROVER_SERIAL`) |
+| 드론 상태 — 계기판 | 조종기 USB (CRSF 텔레메트리 미러) · 파이가 중계하는 FC MAVLink (선택) | `SERIAL_PORT` (`AEROVER_SERIAL`) |
 | 3D 매핑 — ③ ODM 제출 | NodeODM | `ODM_HOST`, `ODM_PORT` (`AEROVER_ODM_HOST`, `AEROVER_ODM_PORT`) |
 | 요구조자 탐지 | YOLO 가중치 `models/best.pt` (아직 없음) | `DETECT_MODEL_PATH` |
 
@@ -61,7 +61,7 @@ GPU가 있는 컴퓨터에선 안돌려봐서 테스트 필요함
 조종 명령   스틱 → EdgeTX → 내장 ELRS 모듈 ─2.4GHz→ ELRS 수신기 ─CRSF(UART)→ FC(INAV)
 텔레메트리  FC(INAV) ─CRSF(UART)→ ELRS 수신기 ─2.4GHz→ 내장 ELRS 모듈 → EdgeTX ─USB 미러→ core/telemetry
 영상·제어   파이 app.py stream ←MAVLink/UDP 14550→ core/link.py (RtpLinkWorker) ← RTP/JPEG UDP 5004
-FC 중계     FC(INAV) ─MAVLink(UART)→ 파이 ─UDP 중계→ core/telemetry/mavlink.py   (배선 전 — 준비만 됨)
+FC 중계     FC(INAV) ─MAVLink(UART)→ 파이 ─UDP 중계→ core/telemetry/mavlink.py   (FC→파이 수신 확인 09-15 · 지상국 중계는 아직 안 켬)
 ```
 
 | 장비 | 돌아가는 것 | 우리가 다루는 것 |
@@ -82,7 +82,8 @@ FC 중계     FC(INAV) ─MAVLink(UART)→ 파이 ─UDP 중계→ core/telemetr
 | UART6 | `serial 5 64` | 수신기(RX_SERIAL), `serialrx_provider = CRSF` |
 | UART3 | `serial 2 2` | GPS |
 | UART2 | `serial 1 0` | 기능 없음 |
-| MSP | USB 만 (기본값) | **MSP 가 켜진 UART 가 없다** — 파이를 붙일 자리가 아직 없다 (성한이가 납땜해서 추가할 예정)|
+| MSP | USB 만 (기본값, 09-12 백업 기준) | **MSP 가 켜진 UART 가 없다** — 파이 ↔ FC MSP 는 미구현 (성한이가 추가예정) |
+| 파이 연결 UART | MAVLink 텔레메트리 57600 | 2026-09-15 Configurator 에서 켬 — **몇 번 UART 인지와 `diff all` 백업은 아직 안 적었다** |
 | feature | GPS · TELEMETRY · VBAT · CURRENT_METER · BLACKBOX · AIRMODE · OSD · PWM_OUTPUT_ENABLE · TX_PROF_SEL | MSP 비트마스크 `0x30480C86` 해석 |
 | 센서 | 가속도 ICM42605 · 기압 SPL06 · 지자기 NONE | |
 | 모터 | DSHOT300, 쿼드 X (`mmix` 4개), `throttle_scale 0.7` | |
@@ -128,11 +129,15 @@ FC 중계     FC(INAV) ─MAVLink(UART)→ 파이 ─UDP 중계→ core/telemetr
 
 ### 파이 ↔ FC 직접 연결 (MSP) — 미구현 (성한이가 추가예정임)
 
-지금 파이는 FC 와 통신하지 않는다 — `pi_code/` 에 MSP·시리얼 코드가 없고, FC 에도 MSP 를 켠 UART 가 없다 (USB 만). 파이가 FC 값을 직접 읽거나 명령을 내려야 해지면 이 방식을 쓴다.
+MSP 코드는 없다 — `pi_code/` 의 FC 연결은 **MAVLink 텔레메트리 읽기**(`control/fc_bridge.py`)뿐이다. 파이가 FC 에 명령을 내리거나 설정값을 읽어야 해지면 이 방식을 쓴다.
 
 - INAV 에서 컴패니언 컴퓨터가 **명령까지** 주고받는 공식 방법은 MSP 다. MAVLink 는 INAV 문서(`docs/Telemetry.md`)에 "transmit-only" — 텔레메트리만 나간다.
-- **텔레메트리만 필요하면 MAVLink 중계가 이미 준비돼 있다.** FC 의 빈 UART 에 MAVLink 텔레메트리를 켜고 파이에 배선한 뒤 `DRONECAM_FC_SERIAL=<장치>` 로 `app.py stream` 을 띄우면, 파이가 메시지를 UDP 로 중계하고 계기판(`core/telemetry/mavlink.py`)이 GPS · 자세 · 배터리 · 기압고도 · 상승률을 CRSF 와 같은 칸에 넣는다.
-- 연결: 파이 시리얼 포트를 켜고, FC 의 빈 UART 에 MSP 를 설정해 배선한다.
+- **텔레메트리만 필요하면 MAVLink 중계로 된다.** FC 의 빈 UART 에 MAVLink 텔레메트리를 켜고 파이에 배선한 뒤 `DRONECAM_FC_SERIAL=<장치>` 로 `app.py stream` 을 띄우면, 파이가 메시지를 UDP 로 중계하고 계기판(`core/telemetry/mavlink.py`)이 GPS · 자세 · 배터리 · 기압고도 · 상승률을 CRSF 와 같은 칸에 넣는다.
+- **2026-09-15 FC → 파이 수신 확인.** FC T → 파이 GPIO15(10번 핀) · GND, 파이 시리얼 콘솔 끔(`raspi-config` → Serial Port: login shell No / hardware Yes), `/dev/serial0` 57600 에서 HEARTBEAT · ATTITUDE · SYS_STATUS · BATTERY_STATUS · VFR_HUD · SCALED_PRESSURE 수신.
+  - INAV 기본 전송률이 1~2Hz 다. 계기판이 느리면 CLI 에서 `mavlink_extra1_rate`(ATTITUDE) 등을 올린다.
+  - GPS_RAW_INT 는 오지 않았다 (원인 미확인 — GPS 모듈 연결 여부부터 볼 것).
+  - 지상국까지 중계는 아직 안 켰다 — 파이 `aerover-cam.service` 에 `DRONECAM_FC_SERIAL=/dev/serial0` 을 넣어야 한다.
+- 연결: 파이 시리얼 포트를 켜고, FC 의 빈 UART 에 MSP 를 설정해 배선한다. **MSP 는 요청-응답이라 선이 하나 더 필요하다** — FC T → 파이 GPIO15, FC R ← 파이 GPIO14(8번 핀), GND.
 - **MSP V2 기준으로 한다.** V1 은 메시지 ID·페이로드가 255 로 막히고 체크섬이 XOR 이다. V2 는 16비트 ID 와 CRC8(DVB-S2, poly `0xD5` — CRSF 와 같은 CRC)을 쓴다.
 - 요청-응답 구조다. 요청하는 파이가 Master, 응답하는 FC 가 Slave.
 

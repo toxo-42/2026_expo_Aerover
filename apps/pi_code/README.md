@@ -181,11 +181,21 @@ systemd 유닛(`aerover-cam.service`, `dronecam.service`)도 파이 시스템 �
 - rtpjpeg: PIL·OpenCV JPEG 왕복(픽셀 동일) · 4:2:2 · 재시작 마커 · 유실 · 순서 뒤바뀜 · 비표준 허프만 거부 (aerover 쪽 테스트, 파일 동일 대조)
 - rtp_output → 소켓 → 재조립, rtp_session 카메라 수명, camera_node 핸드셰이크·ACK·타임아웃·실패 보고·중계, fc_bridge 조각난 입력
 
-**아직 안 한 것 — 파이 실기 검증.** 맥·윈도우에는 picamera2·gpiozero 가 없어서 아래는 돌려보지 못했다.
-- 실제 카메라로 RTP 송신, Wi-Fi 에서의 프레임 유실률(패킷 하나가 빠지면 그 프레임을 버린다), 지상국 HEARTBEAT 타임아웃 뒤 재접속
-- systemd `aerover-cam.service` 는 아직 원본 `cam_server.py`(TCP)를 띄운다 — UDP 로 바꾸려면 실행 명령을 `app.py stream` 으로
-- FC UART 배선 후 `DRONECAM_FC_SERIAL` 중계
-- `camera/factory.py` 구성 (특히 web 의 main + lores 동시 구성)
+**2026-09-15 (파이 실기, Raspberry Pi OS · Python 3.13.5 · imx477)** — stream 을 실제 카메라로 지상국까지 확인, FC → 파이 MAVLink 수신 확인. pytest 는 파이에서 돌리지 않았다.
+- 배포: 맥 `pi_code/` → 파이 `~/drone/` rsync (`__pycache__`·`*bak`·`.DS_Store` 제외). `cam_server.py`·`daemons/daemon.py` 는 파이 원본과 동일(cmp)
+- venv(`droneenv`, `--system-site-packages`): `import cv2, pymavlink, serial, picamera2` 성공 — opencv-python 5.0.0.93 · pymavlink 2.4.49 · pyserial 3.5, picamera2·libcamera 는 apt
+- `app.py stream`: UDP 14550 대기 → 지상국(맥 192.168.137.78) HEARTBEAT 수신 → 카메라 구성 `1280x960-XBGR8888` + raw `2028x1520-SRGGB12` → **지상국 화면에 영상 나옴** (육안)
+- 지상국 "파이 응답 없음" 원인: 서비스가 옛 `cam_server.py`(TCP 5001)만 띄워 14550 을 듣는 프로세스가 없었다 (UDP 라 거부 없이 5초 타임아웃)
+- systemd `aerover-cam.service`: `ExecStart` 를 `app.py stream` 으로 바꾸고 `WorkingDirectory=/home/drone/drone` 추가 (원래 `cam_server.py` 줄은 유닛 안에 주석으로 남김). 재시작 후 active · 14550 대기 · 로그 `MAVLink 대기 중` 확인 → 지상국 재연결 후 영상 나옴 (육안)
+- 옛 파이 코드·녹화(`rec/` 566M)는 `~/drone_backup` 에 보관 중
+- 재부팅 뒤 `aerover-cam` 자동 시작 (active · 14550 대기)
+- **FC(SpeedyBee F405 V4, INAV) → 파이 MAVLink 수신 됨** — FC T → GPIO15(10번 핀) · GND, 파이 시리얼 콘솔 끔, `/dev/serial0` 57600 에서 HEARTBEAT · ATTITUDE · SYS_STATUS · VFR_HUD 등 수신 (INAV 기본 전송률 1~2Hz, GPS_RAW_INT 는 안 옴). MSP 는 코드 없음
+
+**아직 안 한 것 — 파이 실기 검증.** 아래는 파이에서 아직 돌려보지 않았다.
+- Wi-Fi 에서의 프레임 유실률(패킷 하나가 빠지면 그 프레임을 버린다), 지상국 HEARTBEAT 타임아웃 뒤 재접속, `VIDEO_STOP_STREAMING`
+- 파이에서 `python -m pytest`
+- FC 텔레메트리를 지상국까지 중계 — 서비스에 `DRONECAM_FC_SERIAL=/dev/serial0` 아직 안 넣음
+- `camera/factory.py` 의 web 구성 (main + lores 동시 구성). stream 구성은 위에서 확인
 - 실제 H.264 기록, 실제 TCP 스트림을 aerover 로 수신
 - web 에서 H.264 + MJPEG 하드웨어 인코더 동시 사용
 - 실제 버튼·LED
