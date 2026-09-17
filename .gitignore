@@ -16,3 +16,12 @@ maps/
 
 # macOS
 .DS_Store
+
+# 학습 (전부 다시 만들 수 있는 것들 — 원본은 sessions/ 와 라벨 .txt 다)
+dataset/
+runs/
+review/          # 확인용 사본 (라벨 .txt 는 label/ 에 남는다)
+
+*.pt
+dataset/
+runs/

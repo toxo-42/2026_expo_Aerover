@@ -41,6 +41,7 @@ MODE_3D, MODE_LIVE = 0, 1
 NO_LINK = "드론 상태 페이지에서 연결하세요"
 DEFAULT_CONF = 0.50
 MAX_LOG = 100           # 목록이 무한히 자라지 않게 자른다
+STOP_WAIT_MS = 15000    # 정지 대기 — 모델을 여는 중이면 그게 끝나야 중단을 본다
 
 
 class DetectPage(QWidget):
@@ -218,7 +219,7 @@ class DetectPage(QWidget):
     def _refresh_detect_btn(self) -> None:
         """버튼은 **셋이 모두 맞을 때만** 열린다. 왜 잠겼는지도 같이 적는다."""
         if model_available():
-            self.model_note.setText("best.pt")
+            self.model_note.setText(DETECT_MODEL_PATH.name)
             self.model_note.setStyleSheet(f"color:{STATUS_OK_TEXT}; font-weight:600;")
         else:
             self.model_note.setText("✕ 없음")
@@ -234,9 +235,12 @@ class DetectPage(QWidget):
         self.detect_btn.setEnabled(not reason)
         # 추론이 터졌으면 그 사유가 우선이다 — 워커가 끝나며 이 함수를 부르는데,
         # 여기서 덮어쓰면 실패 이유가 화면에 한 순간도 남지 않는다.
-        self.detect_note.setText(self._error or reason)
-        self.detect_note.setStyleSheet(f"color:{STATUS_RED};" if self._error
-                                       else f"color:{TEXT_DIM};")
+        self._set_detect_note(self._error or reason,
+                              STATUS_RED if self._error else TEXT_DIM)
+
+    def _set_detect_note(self, text: str, color: str) -> None:
+        self.detect_note.setText(text)
+        self.detect_note.setStyleSheet(f"color:{color};")
 
     # ---- 탐지 ----
 
@@ -248,25 +252,32 @@ class DetectPage(QWidget):
 
     def _start_detect(self) -> None:
         self.worker = DetectWorker(self.conf.value() / 100)
+        self.worker.ready.connect(self._on_detect_ready)
         self.worker.result.connect(self._on_result)
         self.worker.failed.connect(self._on_detect_failed)
         self.worker.finished.connect(self._on_detect_finished)
         self.worker.start()
         self._error = ""
         self.detect_btn.setText("탐지 정지")
-        self.detect_note.setText("")
+        # ultralytics·torch import 와 가중치 읽기에 몇 초가 걸린다. 그동안 화면이
+        # 아무 말도 없으면 멈춘 것처럼 보인다.
+        self._set_detect_note("모델 여는 중…", TEXT_DIM)
 
     def _stop_detect(self) -> None:
         if self.worker is None:
             return
         self.worker.stop()
-        self.worker.wait(2000)
+        # 모델을 여는 중이면 그게 끝나야 스레드가 중단을 본다. 2초로는 모자란다.
+        self.worker.wait(STOP_WAIT_MS)
 
     def _on_detect_finished(self) -> None:
         self.worker = None
         self.detect_btn.setText("탐지 시작")
         self.video.set_boxes([])
         self._refresh_detect_btn()
+
+    def _on_detect_ready(self) -> None:
+        self.detect_note.setText("")
 
     def _on_detect_failed(self, message: str) -> None:
         self._error = message

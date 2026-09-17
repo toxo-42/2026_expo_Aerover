@@ -19,6 +19,13 @@ opencv-python-headless==5.0.0.93  # 입력 검사 — 라플라시안 블러·OR
 pyodm==1.5.13                   # NodeODM 제출·폴링
 pyserial==3.5                   # 텔레메트리 — CRSF over USB VCP
 pymavlink==2.4.49               # 파이와 UDP 로 이야기하는 MAVLink (제어 · FC 텔레메트리 중계)
+ultralytics==8.4.48             # YOLO 추론 — torch 를 같이 끌고 온다 (설치 수 GB)
+
+# ultralytics 는 opencv-python(비 headless)을 요구한다. 그런데 그건 자기 Qt5 를 같이 들고 와
+# PySide6 와 부딪칠 수 있어, 설치 뒤 headless 로 되돌린다 (cv2 는 어느 쪽이든 같다):
+#   pip install ultralytics==8.4.48
+#   pip uninstall -y opencv-python && pip install opencv-python-headless==5.0.0.93
+# pip 이 "의존성이 깨졌다"고 경고하지만 ultralytics 는 `import cv2` 만 하므로 그대로 돈다.
 
 # 테스트
 pytest>=8

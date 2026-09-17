@@ -33,8 +33,15 @@ SESSIONS_DIR = ROOT / "sessions"
 # 3D 산출물은 **입력 폴더가 어디든 늘 여기 모인다.** 나중에 찾기 쉽게.
 MODELS_DIR = ROOT / "3D_model"
 
-# YOLO 가중치. 아직 없다 — 넣으면 탐지 페이지가 알아서 켜진다.
-DETECT_MODEL_PATH = ROOT / "models" / "best.pt"
+# YOLO 가중치. `models/` 에서 찾는다 — 팀 학습본(best.pt)이 있으면 그것을 쓰고,
+# 없으면 사전학습 yolo11n.pt (person/vehicle 로 통합해 쓴다, `core/detect.py`).
+# 둘 다 없으면 best.pt 이름을 그대로 들고 있는다 — 화면이 그 이름으로 "없음"을 안내한다.
+WEIGHTS_DIR = ROOT / "models"
+DETECT_MODEL_PATH = next((WEIGHTS_DIR / n for n in ("best.pt", "yolo11n.pt")
+                          if (WEIGHTS_DIR / n).is_file()), WEIGHTS_DIR / "best.pt")
+
+# 추론 입력 크기. 느리면 480, 잘 안 잡히면 960 (`camtest.py` 실측 기준).
+DETECT_IMGSZ = int(_env("AEROVER_DETECT_IMGSZ", "640"))
 
 # 파이캠(IMX477 + 6mm 광각)의 내부 파라미터. 수집본에는 EXIF 가 없어 ODM 이
 # 초점거리를 0.85 로 때려맞춘다. 실제 값은 1.111 (= 6.61mm).
@@ -45,7 +52,7 @@ CAMERAS_FILE = ROOT / "cameras_imx477_6mm.json"
 # ---- 장비 · 파이 링크 ----
 
 # 라즈베리파이. 망이 바뀌면 파이에서 `hostname -I` 로 다시 확인한다.
-PI_HOST = _env("AEROVER_PI_HOST", "192.168.137.70")
+PI_HOST = _env("AEROVER_PI_HOST", "192.168.137.68")
 
 # 영상 링크 방식.  rtp = UDP — MAVLink 로 제어하고 RTP/JPEG 로 영상을 받는다 (기본)
 #                 tcp = 옛 방식 — 길이 4바이트 + JPEG 를 TCP 로 받는다 (파이 `app.py tcp`)

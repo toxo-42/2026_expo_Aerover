@@ -35,7 +35,7 @@ python -m pytest
 | 드론 상태 — 영상 · 수집 | 라즈베리파이 `app.py stream` — UDP: MAVLink 제어(14550) + RTP/JPEG 영상(5004). 옛 TCP 는 `AEROVER_LINK=tcp` | `PI_HOST`, `PI_PORT`, `RTP_PORT`, `LINK_MODE` (`AEROVER_PI_HOST`, `AEROVER_PI_PORT`, `AEROVER_RTP_PORT`, `AEROVER_LINK`) |
 | 드론 상태 — 계기판 | 조종기 USB (CRSF 텔레메트리 미러) · 파이가 중계하는 FC MAVLink (선택) | `SERIAL_PORT` (`AEROVER_SERIAL`) |
 | 3D 매핑 — ③ ODM 제출 | NodeODM | `ODM_HOST`, `ODM_PORT` (`AEROVER_ODM_HOST`, `AEROVER_ODM_PORT`) |
-| 요구조자 탐지 | YOLO 가중치 `models/best.pt` (아직 없음) | `DETECT_MODEL_PATH` |
+| 요구조자 탐지 | YOLO 가중치 `models/` — 팀 학습본 `best.pt` 가 있으면 그것, 없으면 사전학습 `yolo11n.pt` | `DETECT_MODEL_PATH`, `DETECT_IMGSZ` (`AEROVER_DETECT_IMGSZ`) |
 
 ### NodeODM 띄우기
 
@@ -141,11 +141,150 @@ MSP 코드는 없다 — `pi_code/` 의 FC 연결은 **MAVLink 텔레메트리 �
 - **MSP V2 기준으로 한다.** V1 은 메시지 ID·페이로드가 255 로 막히고 체크섬이 XOR 이다. V2 는 16비트 ID 와 CRC8(DVB-S2, poly `0xD5` — CRSF 와 같은 CRC)을 쓴다.
 - 요청-응답 구조다. 요청하는 파이가 Master, 응답하는 FC 가 Slave.
 
+## 요구조자 탐지 — 실시간
+
+**카메라를 따로 열지 않는다.** 노트북 웹캠이 아니라 파이 영상을 그대로 쓴다:
+
+```
+파이 app.py stream ─RTP/JPEG UDP 5004→ core/link.py ─QImage→ LinkHub
+   → pages/detect.py [실시간] → DetectWorker.submit → core/detect.py YoloDetector → 화면 박스
+```
+
+- **연결은 드론 상태 페이지에서 한 번만** 한다. 파이는 클라이언트를 하나만 받아서, 탐지 페이지는 같은 링크를 구독만 한다.
+- 순서: 드론 상태에서 [연결] → 요구조자 탐지 → [실시간] → [탐지 시작]. 링크가 없으면 버튼이 잠기고 이유가 적힌다.
+- 가중치는 `models/` 에서 찾는다. `best.pt` 가 있으면 그것을, 없으면 `yolo11n.pt` 를 쓴다.
+  **사전학습(COCO) 모델이면** 클래스를 `person` · `vehicle` 로 통합하고 나머지는 버린다 (`core/detect.py` 의 `COCO_KEEP` — `camtest.py` 와 같은 표).
+  **팀 학습본이면** 클래스 이름을 그대로 쓴다. 판정은 모델의 클래스 이름을 보고 자동이다 (`is_coco`).
+- 모델은 **탐지 시작을 누른 순간 워커 스레드에서 연다.** ultralytics·torch import 에 몇 초가 걸려서, 그동안 화면에 "모델 여는 중…" 이 뜬다. 앱이 뜰 때 열지 않는다.
+- 추론 중에 들어온 프레임은 **버린다.** 큐에 쌓으면 추론이 링크보다 느릴 때 지연이 무한히 늘어난다 — 실시간 화면에 필요한 것은 지금 것이다.
+- 슬라이더의 신뢰도는 **추론 뒤에** 건다. 돌아가는 중에 움직여도 다시 추론하지 않는다. 모델에는 항상 슬라이더 최소값(0.05)으로 묻는다.
+- 잘 안 잡히면 `AEROVER_DETECT_IMGSZ=960`, 느리면 `480`.
+
+## 모형 학습 — best.pt 만들기
+
+사전학습 모델(`yolo11n.pt`)은 **진짜 사람은 잘 잡지만 모형은 거의 못 잡는다.** 시연은
+모형으로 하므로 우리 수집본으로 다시 가르쳐야 한다. 도구는 `tools/` 에 있다 (앱이 아니라
+사람이 쓰는 CLI 라 `src/` 밖에 둔다).
+
+```
+① 수집    앱 [드론 상태] → 수집 제어                    →  sessions/<회차>/*.jpg
+② 사전라벨 uv run python -m tools.autolabel              →  같은 폴더에 *.txt (초안)
+③ 고르기  uv run python -m tools.pick <회차> --count 10  →  label/<회차>_r1/
+④ 확인    uv run python -m tools.review label/<회차>_r1  →  review/ 에 상자를 그린 사본
+⑤ 보정    uv run python -m tools.label_gui label/<회차>_r1  ←  **여기가 진짜 일이다**
+⑥ 묶기    uv run python -m tools.make_dataset label/<회차>_r1  →  dataset/
+⑦ 학습    uv run python -m tools.train --install         →  models/best.pt
+⑧ 투입    앱을 다시 켠다                                  →  config 가 best.pt 를 먼저 집는다
+```
+
+**한 바퀴에 50장을 다 손보지 않는다.** ③이 묶음마다 가장 선명한 한 장씩만 뽑아주므로
+10장으로 한 바퀴를 돌리고, 나온 `best.pt` 로 다음 바퀴를 사전라벨한다 (아래 "반복이 정상이다").
+
+### 데이터를 어떻게 모으는가 (①)
+
+- **반드시 파이 카메라로.** 웹캠으로 모으면 고도·내려다보는 각도·6mm 광각 왜곡이 전부 달라 효과가 없다.
+- 고도·각도·조명·모형 배치를 바꿔가며 **200~400장**. 회차를 나눠 찍어도 ④가 합쳐준다.
+- **진짜 사람이 찍힌 장을 반드시 섞는다.** 모형만 학습시키면 원래 알던 사람을 잊는다
+  (catastrophic forgetting). 모형과 사람이 한 화면에 같이 있으면 제일 좋다.
+- 모형도 라벨은 `person` 이다. "모형사람" 이라는 클래스를 새로 만들지 않는다 — 모형은
+  요구조자를 대신하는 것이고, 클래스를 늘리면 화면·로그·탐지 코드가 전부 따라 복잡해진다.
+
+### 사전라벨은 초안일 뿐이다 (②③)
+
+`tools/autolabel.py` 는 화면을 **4x3 으로 겹치게 쪼개** 조각마다 추론한다. 모형이 20~30픽셀이라
+통째로 넣으면 YOLO 가 거의 못 보기 때문이다 (실측: 통째로 8개 → 타일 20개).
+흐린 장은 자동으로 건너뛴다 (`--min-blur`, 기본 80).
+
+**2026-09-16 실측으로 확인한 두 가지:**
+
+- **큰 모델은 소용없다.** `yolo11x`(114MB)가 `yolo11n` 과 탐지 수가 똑같았고 장당 4초 → 28초로 느려지기만 했다.
+- **잔해에 누운 모형은 자동으로 안 잡힌다.** 사전학습 모델이 아는 `person` 은 대부분 서 있는 사람이다.
+  서 있는 사람·구조대원·차량은 잘 잡는데 **쓰러진 모형만 골라서 못 본다** — 하필 요구조자 탐지의 핵심이다.
+  **이건 손으로 그려 넣어야 하고, 그게 이 작업의 전부다.**
+
+```bash
+uv run python -m tools.autolabel                      # 가장 최근 회차
+uv run python -m tools.autolabel sessions/20260916_190000 --conf 0.03 --imgsz 1280
+```
+
+이미 `.txt` 가 있으면 건드리지 않는다 — 고쳐놓은 라벨을 다시 돌렸다가 날리지 않기 위해서다
+(`--overwrite` 를 줘야 덮어쓴다).
+
+라벨은 **이 저장소의 도구**로 단다. 따로 설치할 것이 없다:
+
+```bash
+uv run python -m tools.label_gui label/20260916_185141_r1
+```
+
+| 조작 | |
+|---|---|
+| 좌클릭 드래그 | 상자 그리기 (현재 클래스로) |
+| 상자 안 클릭 | 선택 — 겹쳐 있으면 **가장 작은** 상자가 잡힌다 (큰 오탐 위의 사람 상자를 집기 위해) |
+| `Delete` | 선택한 상자 지우기 |
+| `1` / `2` | 클래스 바꾸기. 선택 중이면 그 상자의 클래스도 같이 바뀐다 |
+| 휠 | **확대 · 축소** — 커서 밑 지점이 제자리에 있도록 확대한다 |
+| 가운데 버튼 드래그 | 이동 |
+| `F` | 화면에 맞추기 |
+| `A` / `D` | 이전 · 다음 장 (**넘어갈 때 자동 저장**) |
+| `Ctrl+Z` / `Ctrl+S` | 되돌리기 / 저장 |
+
+**확대가 이 도구의 존재 이유다.** 모형이 20~30픽셀이라 화면에 맞춰 띄우면 점으로 보여
+상자를 칠 수가 없다. 바깥 도구를 쓰지 않은 것도 그래서다 — X-AnyLabeling 은 1GB 가 넘고
+labelImg 는 PyQt5 라 이 환경의 PySide6 와 부딪친다.
+
+좌표 변환·선택·저장 규칙은 Qt 를 모르는 순수 함수로 `tools/labelio.py` 에 있다 (테스트가 있다).
+
+**`classes.txt` 의 순서를 바꾸지 마라.** 줄 번호가 곧 클래스 번호라, 바꾸면 이미 그린 라벨이 전부 다른 것을 가리킨다.
+
+### 묶기 (④)
+
+```bash
+uv run python -m tools.make_dataset sessions/20260916_190000
+uv run python -m tools.make_dataset sessions/a sessions/b --val 0.2
+```
+
+**val 을 무작위로 나누지 않는다.** 수집본은 연사라 앞뒤 장이 거의 같은 그림이다. 무작위로
+나누면 train 에 있던 장면이 val 에도 들어가 **점수만 좋아 보이고 실제로는 못 잡는다.**
+그래서 회차마다 뒤쪽 연속 구간을 val 로 뗀다.
+상자가 하나도 없는 장(배경 표본)은 오탐을 줄여주므로 `--background` 비율만큼만 섞는다.
+
+### 학습 (⑤)
+
+**Colab 무료 GPU 를 권한다.** 이 저장소의 torch 는 CPU 빌드라 300장·100에폭이면 몇 시간이
+걸리고, Colab 은 10~20분이면 끝난다. 셀에 코드를 복사하지 않고 **같은 `tools/train.py` 를
+그대로 돌린다** — 복사본은 원본과 어긋나기 시작하면 어느 쪽이 맞는지 알 수 없어진다.
+
+```python
+# Colab 셀 (런타임 → 런타임 유형 변경 → GPU 먼저)
+!pip install -q ultralytics==8.4.48
+# dataset/ 을 zip 으로 올리고 푼 뒤, tools/ 와 src/config.py·src/core 도 같이 올린다
+!python -m tools.train --data dataset/data.yaml --device 0
+# 끝나면 runs/train/weights/best.pt 를 내려받아 models/best.pt 로 넣는다
+```
+
+로컬에서 돌린다면:
+
+```bash
+uv run python -m tools.train --device cpu --install      # --install 이 models/best.pt 로 복사한다
+```
+
+- 출발점은 `yolo11n.pt` 다. **처음부터 배우지 않는다** — 수백 장으로는 사물 인식을 새로 만들 수 없고, 이미 사람을 아는 모델을 **모형도 사람으로 보도록 옮기는 것**이 목표다.
+- `imgsz` 기본값이 960 이다. 모형이 작아서 640 이면 몇 픽셀로 뭉개진다.
+- 항공 시점이라 상하 뒤집기 증강(`flipud`)만 올렸다. 나머지 증강은 ultralytics 기본값 그대로 — 옵션은 한 번에 하나씩 바꾼다.
+
+### 반복이 정상이다
+
+한 바퀴로 끝나지 않는다. 100장쯤 라벨해 한 번 학습한 뒤, **그 `best.pt` 로 다음 회차를 사전라벨**하면 초안이 훨씬 정확해져 보정이 빨라진다.
+
+```bash
+uv run python -m tools.autolabel sessions/<다음회차> --model models/best.pt
+```
+
 ## 설정
 
 환경마다 바꾸는 값은 **전부 `src/config.py` 한 곳**에 있다. 다른 파일에 주소·포트·경로를 새로 적지 않는다.
 
-- **경로는 전부 저장소 루트 기준이다.** `sessions/`, `3D_model/`, `models/best.pt`, `cameras_imx477_6mm.json` 은 `app.py` 옆에서 찾는다. 절대경로는 코드 어디에도 없다.
+- **경로는 전부 저장소 루트 기준이다.** `sessions/`, `3D_model/`, `models/`, `cameras_imx477_6mm.json` 은 `app.py` 옆에서 찾는다. 절대경로는 코드 어디에도 없다.
 - 회차 산출물 폴더(`3D_model/<회차>/`)가 어느 촬영본에서 나왔는지는 `source.txt` 에 **루트 기준 상대경로**로 적는다 (`sessions/20260907_205517` 처럼). 다른 컴퓨터에서 적힌 옛 기록은 폴더명으로 맞춘다 — 그래서 맥에서 만든 `3D_model/` 을 윈도우에서 그대로 쓴다.
 - 장비 주소·포트는 환경변수 `AEROVER_PI_HOST` · `AEROVER_PI_PORT` · `AEROVER_LINK` · `AEROVER_MAVLINK_PORT` · `AEROVER_RTP_PORT` · `AEROVER_SERIAL` · `AEROVER_ODM_HOST` · `AEROVER_ODM_PORT` 로 덮어쓴다. `RTP_PORT` 와 `MAVLINK_PORT` 는 파이 설정과 같아야 한다.
 
@@ -160,6 +299,9 @@ aerover/
 ├── crsf-telemetry-sniffing.md  CRSF 프레임 형식 · 실측
 ├── sessions/                드론 수집본 — 수집 회차마다 폴더
 ├── 3D_model/                ODM 산출물 — 입력 촬영본마다 폴더 (source.txt 가 원본을 가리킨다)
+├── models/                  YOLO 가중치 — best.pt(팀 학습본) 가 있으면 그것, 없으면 yolo11n.pt
+├── tools/                   학습 데이터 도구 (앱이 아니다)
+│                            autolabel · pick · review · label_gui · labelio · make_dataset · train
 ├── tests/                   장비 없이 도는 테스트 (uv run pytest)
 └── src/
     ├── config.py            설정 한 곳 — 경로는 ROOT 기준, 장비는 환경변수
@@ -182,7 +324,7 @@ aerover/
     │   ├── odm.py           NodeODM — OdmJob(순수 순서) · OdmWorker(Qt 어댑터)
     │   ├── cropper.py       메시 배경 제거 — 바닥 평면 · CropBox · 텍스처 축소
     │   ├── workspace.py     회차 산출물 폴더 찾기·만들기 (ModelStore, source.txt 상대경로)
-    │   └── detect.py        YOLO 탐지 자리 — best.pt 가 오면 detect() 만 채운다. DetectWorker 는 탐지기를 주입받는다
+    │   └── detect.py        YOLO 추론 — YoloDetector(ultralytics) · DetectWorker. 영상은 파이 링크에서 온다
     ├── gl/                  3D 뷰포트 (OpenGL)
     ├── ui/                  공용 위젯 · 색
     └── pages/               화면
@@ -200,6 +342,12 @@ aerover/
 uv run python -m src.core.telemetry          # 조종기 수신값을 0.5초마다 출력
 uv run python -m src.core.imgcheck [폴더]     # 촬영본 검사 결과 출력
 uv run python -m src.pages.mapping --demo    # 매핑 페이지만 띄운다
+uv run python -m tools.autolabel             # 수집본에 YOLO 라벨 초안을 깐다
+uv run python -m tools.pick <회차> --count 10 # 라벨할 장 고르기
+uv run python -m tools.review <폴더>          # 라벨을 그려서 review/ 에 저장
+uv run python -m tools.label_gui <폴더>       # 라벨 도구 (상자 그리기·지우기)
+uv run python -m tools.make_dataset <폴더>    # 학습용 dataset/ 구성
+uv run python -m tools.train --install       # 파인튜닝 → models/best.pt
 uv run pytest                                # 테스트
 ```
 
@@ -209,4 +357,9 @@ uv run pytest                                # 테스트
 - `pages/mapping/page.py` `_on_odm_failed`: 노드가 uuid 를 모르면(`NodeResponseError`) `odm_uuid.txt` 를 안 지워 그 회차를 재제출할 수 없다. `TaskFailedError` 와 같이 지울 것. `OdmWorker.cancelled` 시그널도 아직 페이지가 받지 않는다 — 받아서 uuid 파일을 지우면 취소 뒤 바로 재제출된다.
 - `ui/video.py`: QLabel 에 pixmap 을 넣으면 창을 그 크기 아래로 못 줄인다. `label.setMinimumSize(1, 1)`.
 - `pages/detect.py`: 3D 맵 모드 뷰포트에 모델을 올리는 경로가 없다 (3차 보류 중이면 그대로).
+- 실시간 탐지는 **파이 영상에서만** 돈다. 파이 없이 노트북 웹캠으로 시험하려면 `camtest.py` 를 따로 쓴다 (저장소 밖).
 - `ui/palette.py`: 버튼 hover/pressed 가 앰버(#D97706/#B45309) 그대로다. 파란 계열로 바꿀 때 같이.
+
+### 2026/09/16 수정사항 
+#### 객체 탐지 관련 학습 내용정리 
+ - 5개 폴더 안에서 직접 라벨링해서 YOLO 학습좀 시켜놨어요 나머지는 다른 각도에서 찍어서 더 테스트해봐야합니다.

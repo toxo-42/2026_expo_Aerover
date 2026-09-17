@@ -1,6 +1,8 @@
 """Qt 스레드 워커 — 화면 없이 QCoreApplication 만으로 돌린다."""
 import io
+from pathlib import Path
 import socket
+import tempfile
 import threading
 import time
 
@@ -12,10 +14,13 @@ from PySide6.QtCore import QCoreApplication, Qt            # noqa: E402
 from PySide6.QtGui import QImage                           # noqa: E402
 
 from src.core import telemetry as tm                       # noqa: E402
-from src.core.detect import DetectWorker                   # noqa: E402
+from PySide6.QtGui import QColor                           # noqa: E402
+from src.core.detect import (COCO_KEEP, DetectWorker, YoloDetector,  # noqa: E402
+                             is_coco, qimage_to_bgr)
 from src.core.framing import length_prefixed               # noqa: E402
 from src.core.link import LinkHub, LinkWorker, RtpLinkWorker, decode_jpeg  # noqa: E402
 from src.core.rtpjpeg import RtpJpegPacketizer             # noqa: E402
+from tools.labelio import Box as LabelBox, dump, load as load_labels, pick, zoom_at  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -268,3 +273,89 @@ def test_detect_worker_reports_detector_error(app):
     w.submit(QImage(1, 1, QImage.Format.Format_RGB888))
     assert w.wait(2000)
     assert errors == ["탐지 중단 — no model"]
+
+
+def test_qimage_to_bgr_matches_pixels_despite_row_padding():
+    # 폭 3 → 한 줄이 9바이트인데 QImage 는 4바이트로 정렬해 12바이트를 쓴다.
+    # 패딩을 안 잘라내면 두 번째 줄부터 색이 밀린다.
+    img = QImage(3, 2, QImage.Format.Format_RGB888)
+    img.fill(QColor(10, 20, 30))
+    arr = qimage_to_bgr(img)
+    assert arr.shape == (2, 3, 3)
+    assert arr[1, 2].tolist() == [30, 20, 10]       # BGR 로 뒤집혀 있다 (ultralytics 규약)
+    assert arr.flags["C_CONTIGUOUS"]                # torch 가 연속 메모리를 요구한다
+
+
+def test_yolo_detector_merges_coco_classes_but_passes_custom_ones_through():
+    coco = YoloDetector(coco=True)
+    assert coco.label("person") == "person"
+    assert coco.label("bus") == "vehicle"
+    assert coco.label("chair") is None              # 표에 없는 클래스는 버린다
+
+    custom = YoloDetector(coco=False)               # 팀 학습본(best.pt)
+    assert custom.label("chair") == "chair"
+
+    assert is_coco({0: "person", 2: "car"}) and not is_coco({0: "survivor"})
+    assert set(COCO_KEEP.values()) == {"person", "vehicle"}
+
+
+def test_detect_worker_reports_model_open_failure(app):
+    errors, ready = [], []
+
+    class Failing:
+        def load(self):
+            raise FileNotFoundError("weights")
+
+        def __call__(self, frame):                  # 불릴 일이 없다
+            raise AssertionError
+
+    w = DetectWorker(conf=0.5, detector=Failing())
+    w.ready.connect(lambda: ready.append(1), Qt.ConnectionType.DirectConnection)
+    w.failed.connect(errors.append, Qt.ConnectionType.DirectConnection)
+    w.start()
+    assert w.wait(2000)
+    assert errors == ["모델을 열지 못했다 — weights"] and not ready
+
+
+# ---- 라벨 도구 (순수 로직만 — 위젯은 QApplication 이 필요해 여기서 만들지 않는다) ----
+
+def test_labelio_round_trip_and_clamping():
+    text = dump([LabelBox(0, 10, 20, 110, 220), LabelBox(1, -50, -50, 1400, 1100)], 1280, 960)
+    assert len(text.strip().splitlines()) == 2
+
+    tmp = Path(tempfile.mkdtemp()) / "a.txt"
+    tmp.write_text(text, encoding="utf-8")
+    back = load_labels(tmp, 1280, 960)
+    assert [round(v) for v in (back[0].x1, back[0].y1, back[0].x2, back[0].y2)] == [10, 20, 110, 220]
+    # 이미지 밖으로 나간 상자는 가장자리에 맞춰 저장된다
+    assert [round(v) for v in (back[1].x1, back[1].y1, back[1].x2, back[1].y2)] == [0, 0, 1280, 960]
+
+
+def test_labelio_ignores_broken_lines():
+    tmp = Path(tempfile.mkdtemp()) / "b.txt"
+    tmp.write_text("0 0.5 0.5 0.1 0.1\n\n깨진줄\n1 0.2 0.2\n", encoding="utf-8")
+    assert len(load_labels(tmp, 100, 100)) == 1
+
+
+def test_labelio_drops_boxes_fully_outside():
+    assert dump([LabelBox(0, -40, -40, -10, -10)], 100, 100) == ""
+
+
+def test_labelio_normalizes_reverse_drag():
+    box = LabelBox(0, 90, 80, 10, 20).normalized()
+    assert (box.x1, box.y1, box.x2, box.y2) == (10, 20, 90, 80)
+
+
+def test_pick_takes_smallest_box_covering_the_point():
+    boxes = [LabelBox(0, 0, 0, 100, 100), LabelBox(0, 40, 40, 60, 60)]
+    assert pick(boxes, 50, 50) == 1          # 큰 오탐 위에 겹친 작은 상자를 집는다
+    assert pick(boxes, 5, 5) == 0
+    assert pick(boxes, 200, 200) is None
+
+
+def test_zoom_at_keeps_point_under_cursor():
+    offset, zoom, cursor = (37.0, -12.0), 0.8, (500.0, 300.0)
+    before = ((cursor[0] - offset[0]) / zoom, (cursor[1] - offset[1]) / zoom)
+    new_offset = zoom_at(offset, zoom, zoom * 4, cursor)
+    after = ((cursor[0] - new_offset[0]) / (zoom * 4), (cursor[1] - new_offset[1]) / (zoom * 4))
+    assert abs(after[0] - before[0]) < 1e-6 and abs(after[1] - before[1]) < 1e-6
