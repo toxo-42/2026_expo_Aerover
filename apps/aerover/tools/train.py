@@ -59,7 +59,7 @@ AUGMENT = {"flipud": 0.5, "degrees": 30.0, "scale": 0.6, "translate": 0.2, "hsv_
 
 
 def train(data: Path, base: str, epochs: int, imgsz: int, device: str | None,
-          project: Path, name: str, degrees: float | None = None):
+          project: Path, name: str, degrees: float | None = None, batch: int = 16):
     from ultralytics import YOLO
 
     augment = dict(AUGMENT)
@@ -67,7 +67,7 @@ def train(data: Path, base: str, epochs: int, imgsz: int, device: str | None,
         augment["degrees"] = degrees        # 회전이 작은 모형에 해로운지 비교할 때 쓴다
     model = YOLO(base)
     return model.train(data=str(data), epochs=epochs, imgsz=imgsz, device=device,
-                       patience=PATIENCE, project=str(project), name=name,
+                       batch=batch, patience=PATIENCE, project=str(project), name=name,
                        exist_ok=True, **augment)
 
 
@@ -80,6 +80,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--imgsz", type=int, default=IMGSZ)
     ap.add_argument("--device", default=None,
                     help="'0' 이면 첫 GPU, 'cpu' 면 CPU. 비우면 알아서 고른다")
+    ap.add_argument("--batch", type=int, default=16,
+                    help="한 번에 넣는 장 수. 메모리 16GB 맥(mps)에서 imgsz 1280 이면 4 로 줄인다")
     ap.add_argument("--project", type=Path, default=ROOT / "runs")
     ap.add_argument("--name", default="train")
     ap.add_argument("--degrees", type=float, default=None,
@@ -94,7 +96,7 @@ def main(argv: list[str] | None = None) -> None:
     print(f"학습: {args.base} → {args.data}")
     print("  ※ 진짜 사람이 찍힌 장이 섞여 있는지 확인하라. 모형만 배우면 사람을 잊는다.")
     result = train(args.data, args.base, args.epochs, args.imgsz, args.device,
-                   args.project, args.name, args.degrees)
+                   args.project, args.name, args.degrees, args.batch)
 
     best = Path(result.save_dir) / "weights" / "best.pt"
     print(f"\n끝났다: {best}")

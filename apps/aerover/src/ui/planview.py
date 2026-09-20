@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (QDialog, QDoubleSpinBox, QHBoxLayout, QLabel,
 from src.core import cropper
 from src.ui.palette import ACCENT_BLUE, TEXT_DIM, VIEWPORT_BG
 
-GRID = 520             # 긴 축 기준 격자 칸 수
+GRID = 720             # 긴 축 기준 격자 칸 수
 MIN_DRAG_PX = 6        # 이보다 작으면 클릭으로 본다 (선택 해제)
 
 # 높이 램프 — 단일 색상(블루), 명도만 오른다. 어두운 배경 위 순차 스케일.
