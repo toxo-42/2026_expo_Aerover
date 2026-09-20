@@ -189,12 +189,13 @@ systemd 유닛(`aerover-cam.service`, `dronecam.service`)도 파이 시스템 �
 - systemd `aerover-cam.service`: `ExecStart` 를 `app.py stream` 으로 바꾸고 `WorkingDirectory=/home/drone/drone` 추가 (원래 `cam_server.py` 줄은 유닛 안에 주석으로 남김). 재시작 후 active · 14550 대기 · 로그 `MAVLink 대기 중` 확인 → 지상국 재연결 후 영상 나옴 (육안)
 - 옛 파이 코드·녹화(`rec/` 566M)는 `~/drone_backup` 에 보관 중
 - 재부팅 뒤 `aerover-cam` 자동 시작 (active · 14550 대기)
-- **FC(SpeedyBee F405 V4, INAV) → 파이 MAVLink 수신 됨** — FC T → GPIO15(10번 핀) · GND, 파이 시리얼 콘솔 끔, `/dev/serial0` 57600 에서 HEARTBEAT · ATTITUDE · SYS_STATUS · VFR_HUD 등 수신 (INAV 기본 전송률 1~2Hz, GPS_RAW_INT 는 안 옴). MSP 는 코드 없음
+- **FC(SpeedyBee F405 V4, INAV) → 파이 MAVLink 수신 됨** — FC T → GPIO15(10번 핀) · GND, 파이 시리얼 콘솔 끔, `/dev/serial0` 57600 에서 HEARTBEAT · ATTITUDE · SYS_STATUS · VFR_HUD 등 수신 (INAV 기본 전송률 1~2Hz, GPS_RAW_INT 는 안 옴 — GPS 배선 없음). MSP 는 코드 없음
+- **FC 텔레메트리 지상국 중계 됨** (2026-09-20) — 서비스에 `Environment="DRONECAM_FC_SERIAL=/dev/serial0"` 추가(원본은 `aerover-cam.service.20260920bak`), 로그 `FC 중계 /dev/serial0` 확인. 지상국 계기판에 배터리(22.86V·56%)·모드·자세·기압고도 들어옴
+- RC_CHANNELS 는 조종 링크가 끊겨 있으면 페일세이프 기본값(전 채널 고정 · `rssi 0` · `SYS_STATUS` 의 RC_RECEIVER health=False)이 온다. 살아 있으면 `rssi 254` · 채널이 스틱을 따라 움직인다
 
 **아직 안 한 것 — 파이 실기 검증.** 아래는 파이에서 아직 돌려보지 않았다.
 - Wi-Fi 에서의 프레임 유실률(패킷 하나가 빠지면 그 프레임을 버린다), 지상국 HEARTBEAT 타임아웃 뒤 재접속, `VIDEO_STOP_STREAMING`
 - 파이에서 `python -m pytest`
-- FC 텔레메트리를 지상국까지 중계 — 서비스에 `DRONECAM_FC_SERIAL=/dev/serial0` 아직 안 넣음
 - `camera/factory.py` 의 web 구성 (main + lores 동시 구성). stream 구성은 위에서 확인
 - 실제 H.264 기록, 실제 TCP 스트림을 aerover 로 수신
 - web 에서 H.264 + MJPEG 하드웨어 인코더 동시 사용

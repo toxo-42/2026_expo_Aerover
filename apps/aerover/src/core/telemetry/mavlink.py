@@ -17,6 +17,11 @@ UNKNOWN_U16 = 0xFFFF        # MAVLink 의 "모름" 표시
 UNKNOWN_U8 = 0xFF
 UNKNOWN_I = -1
 
+ARMED_FLAG = 0x80           # base_mode 의 MAV_MODE_FLAG_SAFETY_ARMED
+AUTOPILOT_COMPONENT = 1     # MAV_COMP_ID_AUTOPILOT1 — FC 가 쓰는 컴포넌트 번호
+RSSI_UNKNOWN = 255          # RC_CHANNELS.rssi 의 "모름"
+RSSI_MAX = 254              # rssi 실제 범위는 0~254
+
 Update = tuple[str, dict]                   # (상태 키, 갱신할 값)
 Handler = Callable[[object], list[Update]]
 
@@ -57,11 +62,42 @@ def _battery_status(m) -> list[Update]:
     return [("battery", d)] if d else []
 
 
+def _heartbeat(m) -> list[Update]:
+    """arming 상태 → 모드 문자열. CRSF 의 FLIGHT_MODE(0x21) 자리를 채운다.
+
+    **FC 가 보낸 것만 받는다.** 파이 카메라 노드도 HEARTBEAT 를 보내므로
+    (`core/gcs.py` 의 `CAMERA_COMPONENT_ID`) 거르지 않으면 카메라 상태가 FC 를 덮는다.
+
+    `custom_mode`(INAV 비행모드 번호)는 쓰지 않는다 — 2026-09-20 실측에서 disarmed 중
+    22 로 고정이었고 값의 뜻을 확인하지 못했다. 확인되면 여기서 문자열로 바꾼다.
+    """
+    if m.get_srcComponent() != AUTOPILOT_COMPONENT:
+        return []
+    return [("mode", {"text": "ARMED" if m.base_mode & ARMED_FLAG else "DISARMED"})]
+
+
+def _rc_channels(m) -> list[Update]:
+    """조종 링크 품질 → CRSF LINK_STATS(0x14) 자리. **조종기 USB 없이 LINK 칩을 채운다.**
+
+    `rssi` 는 0~254 라 계기판이 쓰는 0~100 으로 줄인다 (`telemetry/status.py` 의
+    `WEAK_BELOW` 가 % 기준이다). dBm(`up_rssi1`)은 MAVLink 에 없어서 건드리지 않는다 —
+    없는 값을 지어내면 화면이 조용히 거짓말을 한다.
+
+    CRSF 와 둘 다 오면 나중에 온 값이 남는다. INAV 의 RSSI 소스가 CRSF LQ 면 두 값이
+    거의 같다 (2026-09-20 실측: MAVLink rssi 254 ↔ CRSF LQ 100).
+    """
+    if m.rssi == RSSI_UNKNOWN:
+        return []
+    return [("link", {"source": "mavlink", "up_lq": round(m.rssi * 100 / RSSI_MAX)})]
+
+
 def _vfr_hud(m) -> list[Update]:
     return [("baro", {"alt_m": float(m.alt)}), ("vario", {"vspeed_ms": float(m.climb)})]
 
 
 HANDLERS: dict[str, Handler] = {
+    "HEARTBEAT": _heartbeat,
+    "RC_CHANNELS": _rc_channels,
     "GPS_RAW_INT": _gps_raw_int,
     "ATTITUDE": _attitude,
     "SYS_STATUS": _sys_status,

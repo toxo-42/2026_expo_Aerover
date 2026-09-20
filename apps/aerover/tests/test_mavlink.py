@@ -106,3 +106,72 @@ def test_unknown_values_are_left_alone():
     apply_mavlink(store, mav.MAVLink_sys_status_message(0, 0, 0, 0, 0xFFFF, -1, -1, 0, 0, 0, 0, 0, 0))
     b = store.snapshot()["battery"]
     assert b["voltage"] == 12.0 and b["remaining_pct"] == 50
+
+
+def _received(link: mav.MAVLink, data: bytes):
+    """보낸 바이트를 다시 파싱한다 — srcComponent 가 붙은 상태로 받아야 한다."""
+    parser = mav.MAVLink(None)
+    parser.robust_parsing = True
+    return parser.parse_buffer(data)[0]
+
+
+def _fc_heartbeat(base_mode: int):
+    """FC(컴포넌트 1)가 보낸 HEARTBEAT. custom_mode 22 는 2026-09-20 INAV 실측값."""
+    fc = mav.MAVLink(None, srcSystem=1, srcComponent=1)
+    return _received(fc, fc.heartbeat_encode(mav.MAV_TYPE_QUADROTOR, mav.MAV_AUTOPILOT_GENERIC,
+                                             base_mode, 22, mav.MAV_STATE_STANDBY).pack(fc))
+
+
+def test_heartbeat_sets_mode_from_arming_flag():
+    store = TelemetryStore(clock=lambda: 5.0)
+
+    assert apply_mavlink(store, _fc_heartbeat(81)) == ("mode",)      # 실측 disarmed
+    assert store.snapshot()["mode"]["text"] == "DISARMED"
+
+    assert apply_mavlink(store, _fc_heartbeat(81 | 0x80)) == ("mode",)
+    s = store.snapshot()
+    assert s["mode"]["text"] == "ARMED" and s["_rx_at"]["mode"] == 5.0
+
+
+def test_camera_heartbeat_does_not_touch_mode():
+    """파이 카메라 노드의 HEARTBEAT 가 FC 모드를 덮으면 안 된다."""
+    store = TelemetryStore()
+    apply_mavlink(store, _fc_heartbeat(81))
+    cam = _camera_link()
+    msg = _received(cam, cam.heartbeat_encode(mav.MAV_TYPE_CAMERA, mav.MAV_AUTOPILOT_INVALID,
+                                              0, 0, mav.MAV_STATE_ACTIVE).pack(cam))
+
+    assert apply_mavlink(store, msg) == ()
+    assert store.snapshot()["mode"]["text"] == "DISARMED"
+
+
+def _rc(rssi: int):
+    fc = mav.MAVLink(None, srcSystem=1, srcComponent=1)
+    ch = [1500] * 18
+    return _received(fc, fc.rc_channels_encode(0, 18, *ch, rssi).pack(fc))
+
+
+def test_rc_channels_rssi_fills_link_lq():
+    """0~254 를 계기판이 쓰는 0~100 으로. 254 는 2026-09-20 실측 최대값."""
+    store = TelemetryStore(clock=lambda: 5.0)
+
+    assert apply_mavlink(store, _rc(254)) == ("link",)
+    assert store.snapshot()["link"]["up_lq"] == 100
+
+    apply_mavlink(store, _rc(127))
+    s = store.snapshot()
+    assert s["link"]["up_lq"] == 50 and s["_rx_at"]["link"] == 5.0
+
+
+def test_unknown_rssi_leaves_link_untouched():
+    """255 는 '모름' — 갱신하면 화면이 링크 0 을 링크 끊김으로 읽는다."""
+    store = TelemetryStore()
+    assert apply_mavlink(store, _rc(255)) == ()
+    assert store.snapshot()["_rx_at"]["link"] is None
+
+
+def test_rssi_does_not_invent_dbm():
+    """MAVLink 에 없는 dBm 은 건드리지 않는다."""
+    store = TelemetryStore()
+    apply_mavlink(store, _rc(254))
+    assert store.snapshot()["link"]["up_rssi1"] == 0

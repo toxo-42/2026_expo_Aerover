@@ -134,3 +134,28 @@ def test_serial_reader_updates_store_and_reconnects_on_error():
     assert snap["battery"]["remaining_pct"] == 77
     assert last_error(snap) is None                  # 두 번째 열기가 성공하며 오류가 지워졌다
     assert len(opens) >= 2
+
+
+def test_no_data_threshold_follows_the_source():
+    """파이 중계(MAVLink)는 수신 간격이 1~4초라 CRSF 기준(0.3초)을 쓰면 안 된다."""
+    clock = Clock()
+    judge = LinkJudge(clock=clock)
+
+    store = TelemetryStore(clock)
+    store.update("link", {"source": "mavlink", "up_lq": 90})
+    snap = store.snapshot()
+    clock.t += 2.0                               # CRSF 였으면 이미 NO_DATA
+    assert judge.status(snap) == "OK"
+    clock.t += 4.0                               # 5초를 넘기면 MAVLink 도 끊긴 것
+    assert judge.status(snap) == "NO_DATA"
+
+
+def test_crsf_keeps_the_strict_threshold():
+    clock = Clock()
+    judge = LinkJudge(clock=clock)
+
+    store = TelemetryStore(clock)
+    store.update("link", {"source": "crsf", "up_lq": 90})
+    snap = store.snapshot()
+    clock.t += 0.5
+    assert judge.status(snap) == "NO_DATA"

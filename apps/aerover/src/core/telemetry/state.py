@@ -18,9 +18,11 @@ def initial_state() -> dict:
         "gps": {"lat": 0.0, "lon": 0.0, "speed_kmh": 0.0, "heading": 0.0,
                 "alt_m": 0, "sats": 0},
         "battery": {"voltage": 0.0, "current": 0.0, "used_mah": 0, "remaining_pct": 0},
+        # source 는 이 값을 누가 줬는지다 ("crsf" | "mavlink"). 두 경로의 수신 주기가
+        # 6배 넘게 달라서 연결 판정 임계값이 달라진다 — `status.LinkJudge` 참고.
         "link": {"up_rssi1": 0, "up_rssi2": 0, "up_lq": 0, "up_snr": 0, "antenna": 0,
                  "rf_mode": 0, "tx_power_idx": 0, "down_rssi": 0, "down_lq": 0,
-                 "down_snr": 0},
+                 "down_snr": 0, "source": ""},
         # 아래 4개는 GPS 모듈이 없어도 FC 가 보내준다 (2026-09-07 실측).
         "attitude": {"roll": 0.0, "pitch": 0.0, "yaw": 0.0},   # deg
         "baro": {"alt_m": 0.0},                                 # 기압 고도 (해발 아님)

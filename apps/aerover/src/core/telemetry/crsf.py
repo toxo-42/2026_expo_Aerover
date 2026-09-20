@@ -72,7 +72,7 @@ def parse_link(p: bytes) -> dict:
     # 실측(2026-09-07 Radiomaster Pocket)은 235 → -21dBm. -p[0] 로 읽으면 -235dBm 이
     # 나오는데 그건 물리적으로 불가능한 값이다.
     r1, r2, dr = struct.unpack("bbb", bytes([p[0], p[1], p[7]]))
-    return dict(up_rssi1=r1, up_rssi2=r2, up_lq=p[2],
+    return dict(source="crsf", up_rssi1=r1, up_rssi2=r2, up_lq=p[2],
                 up_snr=struct.unpack("b", p[3:4])[0],
                 antenna=p[4], rf_mode=p[5], tx_power_idx=p[6],
                 down_rssi=dr, down_lq=p[8],

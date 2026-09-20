@@ -2,7 +2,8 @@
 
 INAV 는 UART 에 MAVLink 텔레메트리를 **내보내기만** 한다 (transmit-only). 그래서 읽기만 한다.
 파싱은 메시지 경계를 맞추기 위해서다 — UDP 데이터그램 하나에 메시지 하나를 담아야
-지상국이 조각을 잇지 않아도 된다. 배선은 아직 없다 (README "파이 ↔ FC").
+지상국이 조각을 잇지 않아도 된다. 배선·서비스 설정은 README "파이 ↔ FC" 참고
+(2026-09-20 부터 `DRONECAM_FC_SERIAL=/dev/serial0` 으로 중계 중).
 """
 from __future__ import annotations
 
