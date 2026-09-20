@@ -135,8 +135,8 @@ MSP 코드는 없다 — `pi_code/` 의 FC 연결은 **MAVLink 텔레메트리 �
 - **텔레메트리만 필요하면 MAVLink 중계로 된다.** FC 의 빈 UART 에 MAVLink 텔레메트리를 켜고 파이에 배선한 뒤 `DRONECAM_FC_SERIAL=<장치>` 로 `app.py stream` 을 띄우면, 파이가 메시지를 UDP 로 중계하고 계기판(`core/telemetry/mavlink.py`)이 GPS · 자세 · 배터리 · 기압고도 · 상승률을 CRSF 와 같은 칸에 넣는다.
 - **2026-09-15 FC → 파이 수신 확인.** FC T → 파이 GPIO15(10번 핀) · GND, 파이 시리얼 콘솔 끔(`raspi-config` → Serial Port: login shell No / hardware Yes), `/dev/serial0` 57600 에서 HEARTBEAT · ATTITUDE · SYS_STATUS · BATTERY_STATUS · VFR_HUD · SCALED_PRESSURE 수신.
   - INAV 기본 전송률이 1~2Hz 다. 계기판이 느리면 CLI 에서 `mavlink_extra1_rate`(ATTITUDE) 등을 올린다.
-  - GPS_RAW_INT 는 오지 않았다 (원인 미확인 — GPS 모듈 연결 여부부터 볼 것).
-  - 지상국까지 중계는 아직 안 켰다 — 파이 `aerover-cam.service` 에 `DRONECAM_FC_SERIAL=/dev/serial0` 을 넣어야 한다.
+  - GPS_RAW_INT 는 오지 않는다. **원인은 GPS 배선 없음** (2026-09-20 확인). 프로토콜 문제가 아니다.
+  - 지상국까지 중계 켬 (2026-09-20) — 아래 "2026/09/20 수정사항".
 - 연결: 파이 시리얼 포트를 켜고, FC 의 빈 UART 에 MSP 를 설정해 배선한다. **MSP 는 요청-응답이라 선이 하나 더 필요하다** — FC T → 파이 GPIO15, FC R ← 파이 GPIO14(8번 핀), GND.
 - **MSP V2 기준으로 한다.** V1 은 메시지 ID·페이로드가 255 로 막히고 체크섬이 XOR 이다. V2 는 16비트 ID 와 CRC8(DVB-S2, poly `0xD5` — CRSF 와 같은 CRC)을 쓴다.
 - 요청-응답 구조다. 요청하는 파이가 Master, 응답하는 FC 가 Slave.
@@ -360,6 +360,98 @@ uv run pytest                                # 테스트
 - 실시간 탐지는 **파이 영상에서만** 돈다. 파이 없이 노트북 웹캠으로 시험하려면 `camtest.py` 를 따로 쓴다 (저장소 밖).
 - `ui/palette.py`: 버튼 hover/pressed 가 앰버(#D97706/#B45309) 그대로다. 파란 계열로 바꿀 때 같이.
 
-### 2026/09/16 수정사항 
-#### 객체 탐지 관련 학습 내용정리 
+### 2026/09/16 수정사항
+#### 객체 탐지 관련 학습 내용정리
  - 5개 폴더 안에서 직접 라벨링해서 YOLO 학습좀 시켜놨어요 나머지는 다른 각도에서 찍어서 더 테스트해봐야합니다.
+
+### 2026/09/20 수정사항
+#### 파이 경로(MAVLink)로 계기판 채우기
+
+조종기 USB(CRSF) 없이 **파이 중계만으로** 계기판이 차게 했다. 두 경로는 독립이다 —
+CRSF 는 `FC → ELRS RX → 조종기 → USB → 지상국`, MAVLink 는 `FC → UART → 파이 → UDP → 지상국`.
+
+**파이 쪽 (배선은 되어 있었고 스위치만 안 켜져 있었다)**
+- `aerover-cam.service` 에 `Environment="DRONECAM_FC_SERIAL=/dev/serial0"` 추가. 원본은 파이의 `aerover-cam.service.20260920bak`.
+- 로그가 `MAVLink 대기 중 … , FC 중계 /dev/serial0` 으로 바뀌면 켜진 것이다. 이 문구가 없으면 `FC_SERIAL` 이 비어 `open_fc_bridge` 가 `None` 을 돌려준 것.
+- 중계 코드는 원래 있었다 (`pi_code` 의 `control/fc_bridge.py` + `programs/stream.py` + `camera_node.forward`). 새로 짠 것은 아래 지상국 핸들러뿐이다.
+
+**지상국 `core/telemetry/mavlink.py` — 핸들러 2개 추가**
+- `HEARTBEAT` → `mode`. `base_mode & 0x80`(SAFETY_ARMED)으로 `ARMED` / `DISARMED`. **FC(컴포넌트 1)가 보낸 것만 받는다** — 파이 카메라 노드도 HEARTBEAT 를 보내서, 안 거르면 카메라 상태가 FC 모드를 덮는다.
+  - `custom_mode`(INAV 비행모드 번호)는 안 쓴다. disarmed 중 22 로 고정이었고 값의 뜻을 확인하지 못했다.
+- `RC_CHANNELS` → `link`. `rssi`(0~254)를 계기판이 쓰는 0~100 으로 줄여 `up_lq` 에 넣는다. **조종기 USB 없이 LINK 칩이 채워진다.** `rssi == 255`(모름)면 갱신하지 않는다.
+  - dBm(`up_rssi1`)은 MAVLink 에 없으므로 건드리지 않는다. 없는 값을 채우면 화면이 조용히 거짓말을 한다.
+
+**연결 판정 — 소스별 임계값 (`core/telemetry/status.py`)**
+- `link` 에 `source` 필드가 생겼다 (`"crsf"` | `"mavlink"`). 두 파서가 각자 자기 출처를 적는다.
+- CRSF 는 0.2초 주기라 `NO_DATA` 기준이 0.3초지만, RC_CHANNELS 는 **실측 0.6Hz · 간격 1.0~4.2초** 다. 같은 기준을 쓰면 값이 멀쩡히 들어와도 계속 `NO_DATA` 로 읽힌다. 그래서 `MAVLINK_NO_DATA_SEC = 5.0` 을 따로 둔다.
+- 출처가 비어 있으면 엄한 쪽(CRSF)을 쓴다. CRSF 단독 동작은 그대로다.
+- CRSF 도 `source` 를 적어야 한다. 안 적으면 MAVLink 가 한 번 박아둔 `"mavlink"` 가 남아, USB 를 꽂아도 느슨한 5초 기준이 계속 적용된다.
+
+#### 실측 기록 (2026-09-20, SpeedyBee F405 V4 + INAV)
+
+- `/dev/serial0` **57600**. 115200 으로 읽으면 깨진다. 정상이면 `fd`(MAVLink v2 매직)로 시작한다.
+- 6초 동안: SYS_STATUS 11 · ATTITUDE 11 · VFR_HUD 11 · RC_CHANNELS 6 · BATTERY_STATUS 6 · SCALED_PRESSURE 6 · STATUSTEXT 6 · HEARTBEAT 6 · SYSTEM_TIME 5. srcSystem 1 / srcComponent 1.
+- 배터리 6S 22.86V · 0.48A · 56% (셀 3.81V). `SYS_STATUS.voltage_battery` 가 0 이면 전압 스케일이 아니라 **배터리 팩이 빠진 것**부터 의심할 것.
+- 조종 링크 상태 판별:
+
+  | | 끊김 | 살아 있음 |
+  |---|---|---|
+  | `RC_CHANNELS.rssi` | 0 | 254 |
+  | 채널 값 | 전 채널 고정 (페일세이프) | 스틱 따라 움직임 |
+  | `SYS_STATUS` RC_RECEIVER | `health=False` | `health=True` |
+  | `STATUSTEXT` | `NO RC LINK`, `UNABLE TO ARM` | 없음 |
+
+  **메시지가 온다는 것만으로는 조종 신호가 살아 있다는 뜻이 아니다.** 끊겨도 페일세이프 값이 계속 온다.
+- 스로틀은 `VFR_HUD.throttle` 이 FC 자신의 출력이라 채널 맵 추측이 필요 없다. RC 링크가 없으면 `65535`(int16 으로 -1 = 무효)가 온다.
+- 어느 RC 채널이 스로틀인지는 FC 의 `map` 설정에 달렸고 **MAVLink 만으로는 알 수 없다.** 스로틀 스틱만 움직이며 어느 `ch` 가 따라가는지 봐야 한다.
+
+#### GUI 개편 사항
+
+콘티와 어긋나 있던 부분과, 화면에서 빈 공간만 차지하던 부분을 고쳤다.
+화면 구성은 Designer(.ui) 가 아니라 **코드로만** 짠다 — 커스텀 위젯(뷰포트·평면도·
+계기판)이 대부분이라 .ui 로 옮겨도 얻는 것이 없다.
+
+**셸 (`main_window.py`)**
+- 좌측 사이드바 190px → **64px 아이콘 레일**. 로고·부제목을 없애고 페이지 이름은 툴팁으로 보낸다.
+- 아이콘은 `icon/*.svg` (Material Symbols). SVG 의 `fill` 만 바꿔 두 벌을 그려 `QIcon` 의 On/Off 에 넣는다 — 선택 안 된 것은 흐리게, 선택된 것은 진하게. 레티나에서 뭉개지지 않게 3배로 그린다.
+  - `QPushButton` 아이콘의 Active 모드는 호버가 아니라 **포커스**다. 호버 강조는 QSS 배경으로 한다.
+
+**드론 상태 (`pages/status.py`)**
+- 상단 HUD 를 떠 있는 둥근 카드에서 **영상 윗변에 붙은 직사각 반투명 바**(`QFrame#hudBar`)로 바꿨다. 상세 텔레메트리 패널은 그대로 떠 있는 카드다.
+- 칩에 상태 아이콘을 붙였다 (`ui/hud_icons.py`, 전부 `QPainter` 로 직접 그린다 — 상태별 SVG 를 두지 않는다).
+  - **BATT**: 5칸 레벨. 한 칸이 20% 라 경고(40%)·위험(20%) 경계가 칸 경계와 맞는다. 올림이라 1% 여도 한 칸은 남는다.
+  - **LINK**: LQ 25 마다 신호 막대 1칸. **LOST(LQ 0) 는 빈 막대 윤곽을 빨강으로** 그려 미수신과 구분한다.
+  - **GPS**: 조준경. 가운데 점은 `sats >= 6` 일 때만 — `HOME 설정` 버튼이 열리는 조건과 같다.
+  - 판정과 색은 페이지가 정하고 아이콘은 받은 값을 그리기만 한다.
+- 하단 제어부를 **한 줄 3구역(연결 | 진행 | 수집)** 으로 재구성. 가운데 늘어나는 칸이 예전엔 빈 공간이었는데, 지금은 진행바와 모든 안내문이 거기 뜬다. 두 번째 줄이 없어져 영상이 그만큼 커졌다.
+  - `파이`·`간격`·`목표` 라벨을 지우고 상태 점(●)과 입력칸 prefix 로 대신한다.
+  - 해상도·fps 는 영상 왼쪽 아래 **OSD** 로 옮겼다.
+
+**3D 매핑 (`pages/mapping/`)**
+- 스텝 카드를 `번호 · 제목 · 짧은 상태` + **카드 폭 전체 버튼**으로 바꿨다. 250px 패널에서 버튼을 오른쪽에 두면 제목과 상태가 눌려 두 줄로 접혔다.
+- 카드 문구를 `85장`, `검사 완료`, `경고 2건`, `60%` 수준으로 줄이고 전문은 툴팁으로 보냈다.
+- 패널 아래 빈 공간 → **기록 카드**. 검사 요약·경고·오류·저장 경로가 시간과 함께 쌓인다(최대 100줄). ODM 이 29분 걸려서 "아까 뭐라고 떴었지" 를 되짚을 수 있어야 한다. 진행률처럼 자주 바뀌는 값은 넣지 않는다.
+- 뷰어 우하단 플로팅 버튼: **확대 · 축소 · 탑뷰 · 시점 초기화**. 글리프만 두고 이름은 툴팁. 확대/축소는 휠과 같은 `camera.zoom()` 을 쓰고 버튼 한 번은 휠 두 칸이다.
+  - 탑뷰는 pitch 89도. 90도면 up 벡터가 무너진다 (orbit 한계각과 같은 값).
+
+**요구조자 탐지 (`pages/detect.py`)**
+- 상단 HUD 도 같은 붙은 바로 통일. 탐지 목록·좌표계 경고는 떠 있는 카드 그대로.
+- 신뢰도 슬라이더에 QSS 를 입혔다. 기본 스타일은 자기 배경을 칠해 바 위에서 얼룩졌다.
+
+**회차 선택에 의미 주기**
+- **검사 결과 캐시 (`core/checkcache.py`)**: 통과한 검사 결과를 `3D_model/<회차>/check.json` 에 저장하고, 회차를 고를 때 되살린다. ② 서브샘플은 ① 이 잰 블러 값이 있어야 도는데, 예전엔 앱을 껐다 켜면 그 값이 사라져 446장 × 46초를 매번 다시 썼다.
+  - 낡음 판정은 입력 폴더의 **파일별 (이름, 크기, 수정시각)** 지문. 장수만 보면 한 장을 바꿔치기한 경우를 놓친다.
+  - 취소된 보고서는 판정을 안 한 것이라 저장하지 않는다.
+- **회차 목록에 단계 표시**: `20260919_164512 — ③ ODM 완료` 처럼. 판단 근거는 산출물 폴더의 파일뿐이다 (`model_cropped.glb` → ④, `model.glb` → ③, `odm_uuid.txt` → ③ 진행 중, `sub/` → ②, `check.json` → ①). 고르기 전에 목록에서 비교할 수 있다.
+
+**데이터 정리 (2026-09-20)**
+- `3D_model/` 854M → 19M, `sessions/` 26M → 19M. 남긴 것은 뷰어 시험용 모델 `3D_model/20260909_195610/` 과 최근 촬영본 `sessions/20260919_163912`, `20260919_164512` 뿐이다.
+- 지운 것: `3D_model/{test, images, images_sub, 20260907_205517}`, `sessions/20260915_182245`, `sessions/20260916_*` 5개(라벨 `.txt` 87개).
+
+#### 남은 것
+
+- **GPS 배선.** `GPS_RAW_INT` 가 안 와서 계기판 GPS · SPD · HOME 행이 비고 `HOME 설정` 버튼이 비활성이다. 매핑에 HOME 이 필요하면 이게 다음 블로커다.
+- `RC_CHANNELS.rssi` 가 INAV 의 어떤 RSSI 소스를 반영하는지 미확인. 실측에서는 CRSF LQ 100 과 rssi 254 가 일치했다.
+- **GUI**: 회차 목록이 `sessions/` 만 본다. 외부 폴더를 ① 에서 직접 고른 회차는 `3D_model/` 에 결과가 남아도 목록에 없다 (`source.txt` 로 이어붙일 수는 있다).
+- **GUI**: 탐지 페이지에는 뷰어 줌 버튼이 없다. 3D 맵 모드에서는 매핑 페이지와 같은 플로팅 버튼이 있는 편이 낫다.
+- 조종기 USB(CRSF)는 여전히 쓸모가 있다. 파이 경로는 Wi-Fi 에 종속이라, Wi-Fi 가 끊기면 계기판 전체가 죽는다. CRSF 는 ELRS 경로라 독립이고 보통 더 멀리 간다 — 야외에서는 둘 다 두는 편이 안전하다.

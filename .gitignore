@@ -21,6 +21,8 @@ maps/
 dataset/
 runs/
 review/          # 확인용 사본 (라벨 .txt 는 label/ 에 남는다)
+# 개인 라벨링 회차 — 라벨 .txt 를 올리지 않는다
+apps/aerover/sessions/20260919_164512/
 
 *.pt
 dataset/
