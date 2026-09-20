@@ -111,6 +111,19 @@ class MeshViewport(QOpenGLWidget):
             self.camera.fit(self._model.lo, self._model.hi, self._aspect())
             self.update()
 
+    def zoom_by(self, steps: float) -> None:
+        """버튼 한 번 = 휠 한 칸. 휠과 같은 함수를 쓴다."""
+        self.camera.zoom(steps)
+        self.update()
+
+    def top_view(self) -> None:
+        """바로 위에서 내려다본다. 매핑 결과는 평면으로 확인할 일이 많다."""
+        if self._model is None:
+            return
+        self.camera.look_down()
+        self.camera.fit(self._model.lo, self._model.hi, self._aspect())
+        self.update()
+
     def _aspect(self) -> float:
         return max(1e-6, self.width() / max(1, self.height()))
 

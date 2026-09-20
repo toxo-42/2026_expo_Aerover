@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout
 
 
@@ -33,11 +34,15 @@ STEPS = [
 ]
 
 
-class StepRow(QFrame):
-    """단계 한 줄. 잠금 상태를 흐림이 아니라 형태로 구분한다 (콘티 6절).
+STATUS_WIDTH = 96      # 제목 오른쪽 상태 글자 자리. 넘치면 … 로 줄이고 툴팁에 전문
 
-    설명글은 **화면에 두지 않고 툴팁으로 보낸다** (시안 2절). 카드에 남는 글은
-    상태뿐이다 — "40장 검사 완료" 처럼 지금 무슨 일이 있었는지만.
+
+class StepRow(QFrame):
+    """단계 카드. 잠금 상태를 흐림이 아니라 형태로 구분한다 (콘티 6절).
+
+    구성은 **제목줄 + 카드 폭 전체 버튼**이다. 버튼을 오른쪽에 두면 250px 패널에서
+    제목과 상태가 눌려 두 줄로 접힌다. 설명글은 화면에 두지 않고 툴팁으로 보낸다
+    (시안 2절). 제목 오른쪽에 남는 글은 상태뿐이다 — "85장", "60%" 처럼 짧게.
     """
 
     triggered = Signal(str)
@@ -47,12 +52,6 @@ class StepRow(QFrame):
         self.setObjectName("panel")
         self.spec = spec
         self._state = State.LOCKED
-
-        # detail 이 여러 줄로 늘어나면 카드도 같이 커져야 한다. 이걸 켜지 않으면
-        # QFrame 이 한 줄 높이만 보고해 경고 목록이 카드 밖으로 잘린다.
-        policy = self.sizePolicy()
-        policy.setHeightForWidth(True)
-        self.setSizePolicy(policy)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(12, 10, 12, 10)
@@ -68,29 +67,28 @@ class StepRow(QFrame):
         self.title = QLabel(spec.title)
         self.title.setStyleSheet("font-weight:600;")
         self.title.setToolTip(spec.hint)      # 설명글은 여기로 들어간다
-        self.button = QPushButton(spec.action)
-        self.button.setObjectName("ghost")
-        self.button.setEnabled(False)
-        self.button.clicked.connect(lambda: self.triggered.emit(spec.key))
-        # 진행 중에는 버튼 자리 왼쪽에 얇은 막대가 들어선다 (시안 2절 — 동적 위젯 전환).
-        self.bar = QProgressBar()
-        self.bar.setTextVisible(False)
-        self.bar.setFixedWidth(70)
-        self.bar.hide()
+        # 상태는 제목 오른쪽 끝에 짧게. 긴 글은 툴팁과 패널 아래 상태줄이 받는다.
+        self.detail = QLabel("")
+        self.detail.setObjectName("dim")
+        self.detail.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         head.addWidget(self.num)
         head.addWidget(self.title)
         head.addStretch(1)
-        head.addWidget(self.bar)
-        head.addWidget(self.button)
+        head.addWidget(self.detail)
         outer.addLayout(head)
 
-        # 상태가 생기기 전에는 줄 자체가 없다. 설명글은 제목 툴팁에 있다.
-        self.detail = QLabel("")
-        self.detail.setObjectName("dim")
-        self.detail.setWordWrap(True)
-        self.detail.hide()
-        outer.addWidget(self.detail)
+        self.button = QPushButton(spec.action)
+        self.button.setObjectName("ghost")
+        self.button.setEnabled(False)
+        self.button.clicked.connect(lambda: self.triggered.emit(spec.key))
+        outer.addWidget(self.button)
+
+        # 진행 중에는 버튼 아래에 얇은 막대가 들어선다 (시안 2절 — 동적 위젯 전환).
+        self.bar = QProgressBar()
+        self.bar.setTextVisible(False)
+        self.bar.hide()
+        outer.addWidget(self.bar)
 
     def set_state(self, state: State, detail: str | None = None) -> None:
         self._state = state
@@ -113,12 +111,11 @@ class StepRow(QFrame):
             self.set_detail(detail)
 
     def set_detail(self, text: str, tip: str = "") -> None:
-        """패널이 250px 뿐이라 절대경로를 그대로 넣으면 카드를 다 잡아먹는다.
-        화면에는 짧게 쓰고 전체 경로는 툴팁으로 보낸다."""
-        self.detail.setText(text)
-        self.detail.setToolTip(tip)
-        self.detail.setVisible(bool(text))
-        self.updateGeometry()      # 줄 수가 바뀌면 카드 높이도 다시 잡혀야 한다
+        """패널이 250px 뿐이라 긴 글은 카드를 다 잡아먹는다. 화면에는 한 줄로
+        줄여 쓰고 전문은 툴팁으로 보낸다."""
+        metrics = QFontMetrics(self.detail.font())
+        self.detail.setText(metrics.elidedText(text, Qt.TextElideMode.ElideMiddle, STATUS_WIDTH))
+        self.detail.setToolTip(tip or text)
 
     @property
     def state(self) -> State:

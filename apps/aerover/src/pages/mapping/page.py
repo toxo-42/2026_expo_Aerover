@@ -9,11 +9,14 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtWidgets import (QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel,
-                               QPushButton, QSizePolicy, QVBoxLayout, QWidget)
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import (QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout,
+                               QLabel, QListWidget, QListWidgetItem, QPushButton,
+                               QSizePolicy, QVBoxLayout, QWidget)
 
 from src.config import CAMERAS_FILE, MODELS_DIR, SESSIONS_DIR
-from src.core import cropper, subsample
+from src.core import checkcache, cropper, subsample
 from src.core.imgcheck import CheckReport, list_images
 from src.core.odm import OdmWorker
 from src.core.workspace import ModelStore
@@ -27,6 +30,15 @@ PANEL_WIDTH = 250        # 시안 2절 — 뷰어에 자리를 내준다
 # 서브샘플 결과는 `3D_model/<회차>/sub/<타임스탬프>/` 에 쌓인다.
 # 실행마다 새 폴더라 이전 선별본을 덮지 않는다 — 어떤 세트로 ODM 을 돌렸는지 남는다.
 HUD_MARGIN = 16         # 뷰어 가장자리와 플로팅 버튼 사이 여백
+ZOOM_STEP = 2.0         # 버튼 한 번에 휠 두 칸 — 한 칸은 체감이 너무 작다
+# (글리프, 툴팁, 누르면 할 일). 이름은 화면에 쓰지 않고 툴팁으로만 보인다.
+VIEW_TOOLS = [
+    ("＋", "확대", lambda v: v.zoom_by(ZOOM_STEP)),
+    ("－", "축소", lambda v: v.zoom_by(-ZOOM_STEP)),
+    ("⌂", "탑뷰", lambda v: v.top_view()),
+    ("↻", "시점 초기화", lambda v: v.reset_view()),
+]
+MAX_LOG = 100           # 기록 카드가 무한히 자라지 않게 자른다
 SUB_DIRNAME = "sub"
 UUID_FILE = "odm_uuid.txt"      # 제출 직후 남긴다 — 29분짜리 작업을 앱을 닫아도 다시 붙잡는다
 MODEL_FILE = "model.glb"
@@ -42,7 +54,7 @@ def _shown(path: Path) -> str:
 
 
 def subsample_detail(sub_dir: Path) -> tuple[str, str]:
-    return f"{_shown(sub_dir)}  ({len(list_images(sub_dir))}장)", str(sub_dir)
+    return f"{len(list_images(sub_dir))}장", f"{_shown(sub_dir)}"
 
 
 class MappingPage(QWidget):
@@ -69,10 +81,8 @@ class MappingPage(QWidget):
         root.addWidget(self.viewport, 1)
 
         # 뷰어 위에 떠 있는다 (시안 2절). 레이아웃이 아니라 좌표로 얹는다.
-        self.reset_btn = QPushButton("↻ 시점 초기화", self)
-        self.reset_btn.setObjectName("hudButton")
-        self.reset_btn.clicked.connect(lambda: self.viewport.reset_view())
-        self.reset_btn.raise_()
+        self.view_tools = self._build_view_tools()
+        self.view_tools.raise_()
 
         self._refresh_sessions()
         self._sync_steps()
@@ -90,11 +100,12 @@ class MappingPage(QWidget):
         label = QLabel("회차")
         label.setObjectName("dim")
         self.session_box = QComboBox()
-        self.session_box.currentTextChanged.connect(self._on_session_changed)
+        self.session_box.currentIndexChanged.connect(self._on_session_changed)
         row.addWidget(label)
         row.addWidget(self.session_box, 1)
         lay.addLayout(row)
 
+        # 카드가 세로 여유를 똑같이 나눠 갖는다 — 아래에 빈 공간을 남기지 않는다.
         self.steps: dict[str, StepRow] = {}
         for i, spec in enumerate(STEPS):
             step = StepRow(i, spec)
@@ -102,44 +113,101 @@ class MappingPage(QWidget):
             self.steps[spec.key] = step
             lay.addWidget(step)
 
-        lay.addStretch(1)
-
-        self.status = QLabel("")
-        self.status.setObjectName("dim")
-        self.status.setWordWrap(True)
-        lay.addWidget(self.status)
+        # 카드 아래 남는 자리는 기록 카드가 받는다. 카드에서 뺀 긴 글(검사 요약,
+        # 경고 목록, 오류, 저장 경로)이 시간순으로 쌓인다 — 빈 공간으로 두지 않는다.
+        # 29분짜리 작업이라 "아까 뭐라고 떴었지" 를 되짚을 수 있어야 한다.
+        log_box = QFrame()
+        log_box.setObjectName("panel")
+        log_lay = QVBoxLayout(log_box)
+        log_lay.setContentsMargins(12, 10, 12, 10)
+        log_lay.setSpacing(6)
+        head = QLabel("기록")
+        head.setStyleSheet("font-weight:600;")
+        log_lay.addWidget(head)
+        self.log = QListWidget()
+        self.log.setObjectName("log")
+        self.log.setFrameShape(QFrame.Shape.NoFrame)
+        self.log.setWordWrap(True)
+        log_lay.addWidget(self.log, 1)
+        lay.addWidget(log_box, 1)
 
         return panel
+
+    def _build_view_tools(self) -> QFrame:
+        """뷰어 우하단 아이콘 버튼 묶음. 이름은 툴팁으로만 보인다."""
+        box = QFrame(self)
+        box.setObjectName("hudTools")      # 버튼만 보이게 — 묶음 자체는 배경이 없다
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        for glyph, tip, action in VIEW_TOOLS:
+            btn = QPushButton(glyph, box)
+            btn.setObjectName("hudIconButton")
+            btn.setToolTip(tip)
+            btn.clicked.connect(lambda _=False, a=action: a(self.viewport))
+            lay.addWidget(btn)
+        return box
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         view = self.viewport.geometry()
-        size = self.reset_btn.sizeHint()
-        self.reset_btn.setGeometry(view.right() - HUD_MARGIN - size.width() + 1,
-                                   view.bottom() - HUD_MARGIN - size.height() + 1,
-                                   size.width(), size.height())
+        size = self.view_tools.sizeHint()
+        self.view_tools.setGeometry(view.right() - HUD_MARGIN - size.width() + 1,
+                                    view.bottom() - HUD_MARGIN - size.height() + 1,
+                                    size.width(), size.height())
 
     # ---- 상태 ----
 
+    def _stage_label(self, folder: Path) -> str:
+        """그 회차가 어디까지 갔는지 — 산출물 폴더의 **파일**만 보고 판단한다.
+        고르기 전에 목록에서 비교할 수 있어야 한다."""
+        out = self._store.find(folder)
+        if out is None:
+            return "미검사"
+        if (out / CROPPED_FILE).is_file():
+            return "④ 배경 제거"
+        if (out / MODEL_FILE).is_file():
+            return "③ ODM 완료"
+        if (out / UUID_FILE).is_file():
+            return "③ 진행 중"
+        if (out / SUB_DIRNAME).is_dir():
+            return "② 선별"
+        return "① 검사" if checkcache.load(folder, out) else "미검사"
+
     def _refresh_sessions(self) -> None:
+        """항목 글자는 `회차 — 단계`, 실제 폴더명은 항목 데이터로 들고 있는다."""
         self.session_box.clear()
         if self.sessions_dir.is_dir():
             names = sorted((d.name for d in self.sessions_dir.iterdir() if d.is_dir()), reverse=True)
         else:
             names = []
         self._has_sessions = bool(names)
-        self.session_box.addItems(names or ["회차 없음"])
+        for name in names:
+            self.session_box.addItem(f"{name}  —  {self._stage_label(self.sessions_dir / name)}",
+                                     name)
+        if not names:
+            self.session_box.addItem("회차 없음", None)
         self.session_box.setEnabled(self._has_sessions and not self._busy())
 
-    def _on_session_changed(self, name: str) -> None:
+    def _update_session_label(self) -> None:
+        """지금 고른 회차의 단계 표시를 다시 적는다. 항목 데이터는 그대로라
+        currentIndexChanged 가 다시 돌지 않는다."""
+        i = self.session_box.currentIndex()
+        name = self.session_box.itemData(i)
+        if name:
+            self.session_box.setItemText(
+                i, f"{name}  —  {self._stage_label(self.sessions_dir / name)}")
+
+    def _on_session_changed(self, index: int) -> None:
         """회차를 고르면 ① 의 입력 폴더가 그 회차가 된다.
 
         검사를 자동으로 걸지는 않는다 — 446장에 약 46초가 들어 사용자가 눌러야 한다.
         """
         if not self.session_box.isEnabled():
             return
-        folder = self.sessions_dir / name
-        if folder.is_dir():
+        name = self.session_box.itemData(index)
+        folder = self.sessions_dir / name if name else None
+        if folder is not None and folder.is_dir():
             self._set_input(folder)
 
     def _set_input(self, folder: Path) -> None:
@@ -150,11 +218,20 @@ class MappingPage(QWidget):
         그래야 앱을 닫았다 켜도 ③ 이 바로 열린다.
         """
         self.input_dir = folder
-        self.report = None
         self.sub_dir = self._latest_sub()
         n = len(list_images(folder))
-        self.steps["input"].set_state(State.READY)
-        self.steps["input"].set_detail(f"{folder.name}  ({n}장) — 검사하지 않았다", str(folder))
+
+        # 앞서 검사해 둔 결과가 있으면 되살린다 — 사진이 그대로일 때만 유효하다.
+        # 446장 재검사에 46초가 들고, ② 는 그 결과의 블러 값이 있어야 돌아간다.
+        out = self._out_dir()
+        self.report = checkcache.load(folder, out) if out else None
+        if self.report is not None:
+            self.steps["input"].set_state(State.DONE)
+            self.steps["input"].set_detail("검사 완료", self.report.summary())
+            self._note(f"{folder.name} — 지난 검사 결과를 불러왔다 ({self.report.summary()})")
+        else:
+            self.steps["input"].set_state(State.READY)
+            self.steps["input"].set_detail(f"{n}장", str(folder))
         self._sync_steps()
 
     def _sync_steps(self) -> None:
@@ -182,6 +259,7 @@ class MappingPage(QWidget):
 
         self._sync_odm()
         self._sync_crop()
+        self._update_session_label()
         if self.steps["save"].state is not State.DONE:
             self.steps["save"].set_state(State.READY)
 
@@ -200,13 +278,13 @@ class MappingPage(QWidget):
 
         if self._model_path() and self._model_path().is_file():
             step.set_state(State.DONE)
-            step.set_detail(_shown(self._model_path()), str(self._model_path()))
+            step.set_detail(self._model_path().name, str(self._model_path()))
         elif self._saved_uuid():
             step.set_state(State.READY)
-            step.set_detail(f"작업 {self._saved_uuid()[:8]} 의 결과를 가져온다")
+            step.set_detail("결과 받기", f"작업 {self._saved_uuid()[:8]} 의 결과를 가져온다")
         elif self.sub_dir:
             step.set_state(State.READY)
-            step.set_detail(f"{len(list_images(self.sub_dir))}장을 제출한다 (약 29분)")
+            step.set_detail(f"{len(list_images(self.sub_dir))}장", "제출하면 약 29분 걸린다")
         else:
             step.set_state(State.LOCKED)
             step.set_detail("")
@@ -218,7 +296,7 @@ class MappingPage(QWidget):
             return
         if self._cropped_path() and self._cropped_path().is_file():
             step.set_state(State.DONE)
-            step.set_detail(_shown(self._cropped_path()), str(self._cropped_path()))
+            step.set_detail(self._cropped_path().name, str(self._cropped_path()))
         elif self._model_path() and self._model_path().is_file():
             step.set_state(State.READY)
             step.set_detail("")
@@ -284,7 +362,7 @@ class MappingPage(QWidget):
         elif key == "save":
             self._pick_model()
         else:
-            self.status.setText(f"'{self.steps[key].spec.title}' 은 아직 연결되지 않았다.")
+            self._note(f"'{self.steps[key].spec.title}' 은 아직 연결되지 않았다.")
 
     def _cancel_step(self, key: str) -> None:
         if key == "input":
@@ -308,7 +386,7 @@ class MappingPage(QWidget):
             return
         step = self.steps["input"]
         step.set_state(State.RUNNING)
-        step.set_detail(f"{self.input_dir.name} — 검사 중…", str(self.input_dir))
+        step.set_detail("검사 중…", str(self.input_dir))
         step.set_progress(0, 1)
         self._note("장수·해상도·EXIF·블러·인접매칭을 확인한다.", TEXT_DIM)
 
@@ -327,23 +405,22 @@ class MappingPage(QWidget):
     def _on_check_progress(self, done: int, total: int) -> None:
         step = self.steps["input"]
         step.set_progress(done, total)
-        step.set_detail(f"{self.input_dir.name} — 검사 중… {done}/{total}")
+        step.set_detail(f"{done}/{total}")
 
     def _on_check_done(self, report: CheckReport) -> None:
         self.report = report
         if report.ok:
             self.steps["input"].set_state(State.DONE)
-            # 참고는 차단하지 않지만 보이긴 해야 한다 — EXIF 없음이 여기 뜬다.
-            detail = report.summary()
-            if report.notes:
-                detail += "\n" + "\n".join(f"- {t}" for t in report.notes)
-            self.steps["input"].set_detail(detail, str(report.folder))
+            # 참고는 차단하지 않지만 보이긴 해야 한다 — EXIF 없음이 툴팁에 뜬다.
+            tip = "\n".join([report.summary(), *(f"- {t}" for t in report.notes)])
+            self.steps["input"].set_detail("검사 완료", tip)
+            checkcache.save(report, self._out_dir(create=True))
             self._note(f"검사 통과 — {report.summary()}", STATUS_OK_TEXT)
         else:
             # 경고는 통과 못 한 것이다. ① 은 다시 실행할 수 있게 READY 로 둔다.
             self.steps["input"].set_state(State.READY)
-            self.steps["input"].set_detail(
-                "\n".join(f"! {w}" for w in report.warnings), str(report.folder))
+            self.steps["input"].set_detail(f"경고 {len(report.warnings)}건",
+                                          "\n".join(f"! {w}" for w in report.warnings))
             self._note(f"경고 {len(report.warnings)}건 — ODM 에 넣기 전에 재촬영할 것.", STATUS_RED)
 
     def _on_check_finished(self) -> None:
@@ -420,11 +497,12 @@ class MappingPage(QWidget):
     def _on_odm_progress(self, pct: float, stage: str) -> None:
         step = self.steps["odm"]
         step.set_progress(int(pct), 100)
-        step.set_detail(stage)
+        # 카드에는 진행률만. 단계 이름은 길어서 툴팁과 아래 상태줄로 보낸다.
+        step.set_detail(f"{pct:.0f}%", stage)
 
     def _on_odm_done(self, result) -> None:
         self.steps["odm"].set_state(State.DONE)
-        self.steps["odm"].set_detail(_shown(result.glb), str(result.glb))
+        self.steps["odm"].set_detail(result.glb.name, str(result.glb))
         self._note(f"ODM 완료 — {result.uuid[:8]} · 저장: {_shown(result.glb)}", STATUS_OK_TEXT)
         self.load_model_file(str(result.glb))       # 끝나면 바로 띄운다
 
@@ -482,7 +560,7 @@ class MappingPage(QWidget):
 
     def _on_crop_done(self, result) -> None:
         self.steps["crop"].set_state(State.DONE)
-        self.steps["crop"].set_detail(_shown(result.out), str(result.out))
+        self.steps["crop"].set_detail(result.out.name, str(result.out))
         self._note(f"삼각형 {result.faces_before:,} → {result.faces_after:,} "
                    f"({result.ratio * 100:.1f}%) · 저장: {_shown(result.out)}", STATUS_OK_TEXT)
         self.load_model_file(str(result.out))     # 자른 결과를 바로 띄운다
@@ -516,8 +594,13 @@ class MappingPage(QWidget):
     # ---- 공용 ----
 
     def _note(self, text: str, color: str = TEXT_DIM) -> None:
-        self.status.setStyleSheet(f"color:{color};")
-        self.status.setText(text)
+        """기록 카드 맨 위에 쌓는다. 진행률처럼 자주 바뀌는 값은 넣지 않는다 —
+        다른 글이 순식간에 밀려난다."""
+        item = QListWidgetItem(f"{datetime.now():%H:%M}  {text}")
+        item.setForeground(QColor(color))
+        self.log.insertItem(0, item)
+        while self.log.count() > MAX_LOG:
+            self.log.takeItem(self.log.count() - 1)
 
     def shutdown(self) -> None:
         """MainWindow.closeEvent 규약. QStackedWidget 안의 위젯은 closeEvent 를

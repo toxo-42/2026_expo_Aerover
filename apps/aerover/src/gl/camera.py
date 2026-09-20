@@ -44,6 +44,10 @@ class OrbitCamera:
         self.yaw = math.radians(DEFAULT_YAW_DEG)
         self.pitch = math.radians(DEFAULT_PITCH_DEG)
 
+    def look_down(self) -> None:
+        """탑뷰 — 90도는 up 벡터가 무너져서 orbit 과 같은 한계각을 쓴다."""
+        self.pitch = math.radians(89.0)
+
     def fit(self, lo, hi, aspect: float = 1.5, margin: float = 1.06) -> None:
         """바운딩 박스가 화면에 꽉 들어오도록 맞춘다.
 
