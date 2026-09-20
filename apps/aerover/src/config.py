@@ -33,6 +33,9 @@ SESSIONS_DIR = ROOT / "sessions"
 # 3D 산출물은 **입력 폴더가 어디든 늘 여기 모인다.** 나중에 찾기 쉽게.
 MODELS_DIR = ROOT / "3D_model"
 
+# 사이드바 아이콘 (SVG).
+ICON_DIR = ROOT / "icon"
+
 # YOLO 가중치. `models/` 에서 찾는다 — 팀 학습본(best.pt)이 있으면 그것을 쓰고,
 # 없으면 사전학습 yolo11n.pt (person/vehicle 로 통합해 쓴다, `core/detect.py`).
 # 둘 다 없으면 best.pt 이름을 그대로 들고 있는다 — 화면이 그 이름으로 "없음"을 안내한다.

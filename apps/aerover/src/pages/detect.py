@@ -85,8 +85,9 @@ class DetectPage(QWidget):
         view = self.views.geometry()
         m = HUD_MARGIN
 
-        self.hud.setGeometry(view.x() + m, view.y() + m,
-                             view.width() - 2 * m, self.hud.sizeHint().height())
+        # 상단 바는 여백 없이 뷰어 윗변에 붙인다. 목록·경고만 떠 있는 카드다.
+        self.hud.setGeometry(view.x(), view.y(),
+                             view.width(), self.hud.sizeHint().height())
 
         right = view.right() - m - LIST_WIDTH + 1
         warn_h = 0 if self.warn.isHidden() else self.warn.sizeHint().height()
@@ -116,7 +117,7 @@ class DetectPage(QWidget):
     def _build_hud(self) -> QFrame:
         """상단 한 줄 — 모드 · 모델 · 신뢰도 · 시작 버튼."""
         box = QFrame(self)
-        box.setObjectName("hud")
+        box.setObjectName("hudBar")     # 떠 있는 카드가 아니라 뷰어 윗변에 붙은 바
         lay = QHBoxLayout(box)
         lay.setContentsMargins(14, 10, 14, 10)
         lay.setSpacing(14)

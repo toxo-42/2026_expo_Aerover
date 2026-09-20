@@ -32,6 +32,7 @@ from src.config import PI_HOST, PI_PORT, SERIAL_PORT, SESSIONS_DIR, TARGET_AGL_M
 from src.core import telemetry as tm
 from src.core.capture import CaptureSession
 from src.core.link import LinkHub
+from src.ui.hud_icons import BatteryIcon, GpsIcon, LinkIcon
 from src.ui.metric import MetricRow
 from src.ui.palette import STATUS_OK_TEXT, STATUS_RED, TEXT_DIM, TEXT_PRIMARY, WARN_AMBER
 from src.ui.video import VideoView
@@ -202,10 +203,12 @@ class TelemetryPanel(QFrame):
 
 
 class HudChip(QFrame):
-    """상단 HUD 한 칸 — 이름 + 값. 값 색으로 상태를 말한다."""
+    """상단 HUD 한 칸 — 이름 + 값. 값 색으로 상태를 말한다.
+    icon 을 주면 값 왼쪽에 붙는다 (예: 배터리 레벨)."""
 
-    def __init__(self, key: str, parent=None) -> None:
+    def __init__(self, key: str, icon: QWidget | None = None, parent=None) -> None:
         super().__init__(parent)
+        self.setObjectName("hudChip")     # 전역 QWidget 배경을 받지 않게 (palette.py)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -214,7 +217,13 @@ class HudChip(QFrame):
         self.value = QLabel("—")
         self.value.setObjectName("chipValue")
         lay.addWidget(self.key)
-        lay.addWidget(self.value)
+
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        if icon is not None:
+            row.addWidget(icon)
+        row.addWidget(self.value)
+        lay.addLayout(row)
 
     def set(self, text: str, color: str = TEXT_PRIMARY) -> None:
         self.value.setText(text)
@@ -235,6 +244,7 @@ class StatusPage(QWidget):
         self.capture: CaptureSession | None = None     # 끝난 뒤에도 남겨 결과 문구에 쓴다
         self._saving = False
         self._frame_times: list[float] = []
+        self._link_failed = False      # 실패 뒤 closed 가 와도 빨간 점을 남긴다
 
         # 영상이 화면을 채우고, 제어부는 아래 고정 패널에 둔다 (시안 1절).
         root = QVBoxLayout(self)
@@ -253,13 +263,15 @@ class StatusPage(QWidget):
         self.telemetry.refreshed.connect(self._on_telemetry)
         self.telemetry.refresh()  # 첫 틱(200ms)을 기다리지 않고 칩을 채운다
         self.telemetry.hide()
-        for w in (self.hud, self.telemetry):
+        # 영상 왼쪽 아래 해상도·fps. 카메라 화면의 OSD 처럼 프레임이 올 때만 보인다.
+        self.osd = QLabel(self)
+        self.osd.setObjectName("osd")
+        self.osd.hide()
+        for w in (self.hud, self.telemetry, self.osd):
             w.raise_()
 
         self.hub.frame_ready.connect(self._on_frame)
-        self.hub.connected.connect(
-            lambda: self._set_note(self.link_note, "연결됨", STATUS_OK_TEXT)
-        )
+        self.hub.connected.connect(self._on_connected)
         self.hub.failed.connect(self._on_failed)
         self.hub.closed.connect(self._on_link_finished)
 
@@ -270,12 +282,16 @@ class StatusPage(QWidget):
         [HOME 설정] 은 **이 자리를 이륙지점으로 잡는다.** 자동으로 안 잡는 이유는
         `core/telemetry/home.py` 주석 참고."""
         box = QFrame(self)
-        box.setObjectName("hud")
+        box.setObjectName("hudBar")     # 떠 있는 카드가 아니라 영상 윗변에 붙은 바 (콘티 1절)
         lay = QHBoxLayout(box)
         lay.setContentsMargins(14, 8, 10, 8)
         lay.setSpacing(20)
 
-        self.chips = {k: HudChip(k) for k in ("LINK", "BATT", "ALT", "MODE", "GPS")}
+        self.icons = {"LINK": LinkIcon(), "BATT": BatteryIcon(), "GPS": GpsIcon()}
+        self.chips = {
+            k: HudChip(k, self.icons.get(k))
+            for k in ("LINK", "BATT", "ALT", "MODE", "GPS")
+        }
         for chip in self.chips.values():
             lay.addWidget(chip)
         lay.addStretch(1)
@@ -306,23 +322,29 @@ class StatusPage(QWidget):
     def _on_telemetry(self, snap) -> None:
         """펼친 패널과 **같은 스냅샷**으로 상단 칩을 채운다."""
         status = tm.link_status(snap)
-        self.chips["LINK"].set(
-            status, {"OK": STATUS_OK_TEXT, "WEAK": WARN_AMBER}.get(status, STATUS_RED)
+        color = {"OK": STATUS_OK_TEXT, "WEAK": WARN_AMBER}.get(status, STATUS_RED)
+        self.chips["LINK"].set(status, color)
+        # 막대는 LQ 로 그린다. LOST 도 LQ 가 0 이라 막대 없이 윤곽만 남는다.
+        self.icons["LINK"].set_level(
+            None if status == "NO_DATA" else snap["link"]["up_lq"], color
         )
 
         if tm.age(snap, "battery") is None:
             self.chips["BATT"].set("—", TEXT_DIM)
+            self.icons["BATT"].set_level(None)
         else:
             b = snap["battery"]
             pct = b["remaining_pct"]
-            self.chips["BATT"].set(
-                f"{b['voltage']:.1f}V · {pct}%",
+            color = (
                 STATUS_RED
                 if pct < BATT_CRIT_PCT
                 else WARN_AMBER
                 if pct < BATT_WARN_PCT
-                else STATUS_OK_TEXT,
+                else STATUS_OK_TEXT
             )
+            # 칩 문구는 이 한 줄에서 정한다. 아이콘은 pct 만 받아 따로 그린다.
+            self.chips["BATT"].set(f"{b['voltage']:.1f}V · {pct}%", color)
+            self.icons["BATT"].set_level(pct, color)
 
         if tm.age(snap, "baro") is None:
             self.chips["ALT"].set("—", TEXT_DIM)
@@ -343,15 +365,15 @@ class StatusPage(QWidget):
 
         if tm.age(snap, "gps") is None:
             self.chips["GPS"].set("—", TEXT_DIM)
+            self.icons["GPS"].set_state(False)
             self.home_btn.setEnabled(False)
             return
 
         sats = snap["gps"]["sats"]
         fixed = sats >= MIN_SATS
-        self.chips["GPS"].set(
-            f"{sats} sats",
-            STATUS_OK_TEXT if fixed else (WARN_AMBER if sats else STATUS_RED),
-        )
+        color = STATUS_OK_TEXT if fixed else (WARN_AMBER if sats else STATUS_RED)
+        self.chips["GPS"].set(f"{sats} sats", color)
+        self.icons["GPS"].set_state(True, fixed, color)
         # fix 가 못 미더우면 HOME 을 못 잡게 막는다 — 틀린 자리를 잡으면 조용히 계속 틀린다.
         self.home_btn.setEnabled(fixed)
 
@@ -359,12 +381,11 @@ class StatusPage(QWidget):
         super().resizeEvent(event)
         view = self.video.geometry()
         m = HUD_MARGIN
+        # 상단 바는 여백 없이 영상 윗변에 붙인다. 상세 패널만 떠 있는 카드다.
         self.hud.setGeometry(
-            view.x() + m,
-            view.y() + m,
-            view.width() - 2 * m,
-            self.hud.sizeHint().height(),
+            view.x(), view.y(), view.width(), self.hud.sizeHint().height()
         )
+        self._place_osd()
         if not self.telemetry.isHidden():
             top = self.hud.geometry().bottom() + m
             self.telemetry.setGeometry(
@@ -374,33 +395,63 @@ class StatusPage(QWidget):
                 min(self.telemetry.sizeHint().height(), view.bottom() - m - top),
             )
 
+    def _place_osd(self) -> None:
+        view, m = self.video.geometry(), HUD_MARGIN
+        self.osd.adjustSize()
+        self.osd.move(view.x() + m, view.bottom() - m - self.osd.height() + 1)
+
     def _build_control(self) -> QFrame:
-        """하단 고정 패널 — 링크와 수집을 한 줄에 둔다."""
+        """하단 고정 패널 — 한 줄 3구역: 연결 | 진행 | 수집.
+
+        가운데 구역이 늘어나는 칸이다. 빈 공간으로 두지 않고 진행바와 안내문을
+        둔다 — 연결·수집 상태 문구가 모두 여기 한 곳에 뜬다. 라벨 위젯은 두지
+        않고 상태 점·입력칸 prefix 로 대신해 폭을 아낀다.
+        """
         box = QFrame()
         box.setObjectName("panel")
-        lay = QVBoxLayout(box)
-        lay.setContentsMargins(16, 12, 16, 12)
-        lay.setSpacing(8)
-
-        row = QHBoxLayout()
+        row = QHBoxLayout(box)
+        row.setContentsMargins(16, 10, 16, 10)
         row.setSpacing(8)
+
+        # ---- 연결 ----
+        # 상태 점: 끊김(흐림) · 연결 중(앰버) · 연결됨(시안) · 실패(빨강)
+        self.link_dot = QLabel("●")
+        self.link_dot.setToolTip("파이 연결 상태")
+        self._set_dot(TEXT_DIM)
         # 파이 주소를 화면에서 바꾼다. 기존 코드는 세 파일에 하드코딩돼 있었다.
         self.addr = QLineEdit(f"{PI_HOST}:{PI_PORT}")
         self.addr.setFixedWidth(170)
+        self.addr.setToolTip("파이 주소 (호스트:포트)")
         self.connect_btn = QPushButton("연결")
         self.connect_btn.clicked.connect(self._toggle_link)
-        self.link_note = QLabel("")
-        self.link_note.setObjectName("dim")
+        row.addWidget(self.link_dot)
+        row.addWidget(self.addr)
+        row.addWidget(self.connect_btn)
+        row.addWidget(self._sep())
 
+        # ---- 진행 (늘어나는 칸) ----
+        self.progress = QProgressBar()
+        self.progress.setTextVisible(False)
+        self.progress.setFixedWidth(160)
+        self.progress.hide()
+        self.note = QLabel("연결하면 수집할 수 있다")
+        self.note.setObjectName("dim")
+        row.addWidget(self.progress)
+        row.addWidget(self.note, 1)
+        row.addWidget(self._sep())
+
+        # ---- 수집 ----
         self.interval = QDoubleSpinBox()
         self.interval.setRange(0.2, 30.0)
         self.interval.setSingleStep(0.5)
         self.interval.setValue(DEFAULT_INTERVAL)
+        self.interval.setPrefix("간격 ")
         self.interval.setSuffix(" 초")
 
         self.target = QSpinBox()
         self.target.setRange(0, 2000)
         self.target.setValue(DEFAULT_TARGET)
+        self.target.setPrefix("목표 ")
         self.target.setSuffix(" 장")
         self.target.setToolTip("0 이면 정지할 때까지 계속 저장한다")
 
@@ -408,27 +459,13 @@ class StatusPage(QWidget):
         self.capture_btn.setEnabled(False)
         self.capture_btn.clicked.connect(self._toggle_capture)
 
-        row.addWidget(QLabel("파이"))
-        row.addWidget(self.addr)
-        row.addWidget(self.connect_btn)
-        row.addWidget(self.link_note, 1)
-        row.addWidget(self._sep())
-        row.addWidget(QLabel("간격"))
         row.addWidget(self.interval)
-        row.addWidget(QLabel("목표"))
         row.addWidget(self.target)
         row.addWidget(self.capture_btn)
-        lay.addLayout(row)
-
-        self.progress = QProgressBar()
-        self.progress.setTextVisible(False)
-        self.progress.hide()
-        lay.addWidget(self.progress)
-
-        self.capture_note = QLabel("연결하면 수집할 수 있다")
-        self.capture_note.setObjectName("dim")
-        lay.addWidget(self.capture_note)
         return box
+
+    def _set_dot(self, color: str) -> None:
+        self.link_dot.setStyleSheet(f"color:{color}; font-size:18px;")
 
     @staticmethod
     def _sep() -> QFrame:
@@ -449,14 +486,16 @@ class StatusPage(QWidget):
         try:
             port = int(port or PI_PORT)
         except ValueError:
-            self._set_note(self.link_note, "주소 형식은 호스트:포트", STATUS_RED)
+            self._set_note(self.note, "주소 형식은 호스트:포트", STATUS_RED)
             return
 
+        self._link_failed = False
         self.hub.connect_to(host, port)
 
         self.addr.setEnabled(False)
         self.connect_btn.setText("해제")
-        self._set_note(self.link_note, "연결 중…", TEXT_DIM)
+        self._set_dot(WARN_AMBER)
+        self._set_note(self.note, "연결 중…", TEXT_DIM)
 
     def _stop_link(self) -> None:
         if not self.hub.active:
@@ -471,9 +510,18 @@ class StatusPage(QWidget):
         self.connect_btn.setText("연결")
         self.capture_btn.setEnabled(False)
         self.video.clear()
+        self.osd.hide()
+        if not self._link_failed:
+            self._set_dot(TEXT_DIM)
+
+    def _on_connected(self) -> None:
+        self._set_dot(STATUS_OK_TEXT)
+        self._set_note(self.note, "연결됨 — 영상이 오면 수집할 수 있다", STATUS_OK_TEXT)
 
     def _on_failed(self, message: str) -> None:
-        self._set_note(self.link_note, message, STATUS_RED)
+        self._link_failed = True
+        self._set_dot(STATUS_RED)
+        self._set_note(self.note, message, STATUS_RED)
 
     def _on_frame(self, image: QImage, raw: bytes) -> None:
         self.video.set_frame(image)
@@ -484,11 +532,12 @@ class StatusPage(QWidget):
         del self._frame_times[:-15]
         span = self._frame_times[-1] - self._frame_times[0]
         fps = (len(self._frame_times) - 1) / span if span > 0 else 0.0
-        self._set_note(
-            self.link_note,
-            f"{image.width()}x{image.height()} · {fps:.1f} fps",
-            STATUS_OK_TEXT,
-        )
+        self.osd.setText(f"{image.width()}×{image.height()} · {fps:.1f} fps")
+        if self.osd.isHidden():
+            self.osd.show()
+            if not self._saving:
+                self._set_note(self.note, "영상 수신 중 — 수집할 수 있다", STATUS_OK_TEXT)
+        self._place_osd()      # 글자 폭이 바뀌면 크기를 다시 잡는다
 
         if self._saving and self.capture.offer(raw, now):
             self._on_saved()
@@ -533,9 +582,13 @@ class StatusPage(QWidget):
             return
         c = self.capture
         count = f"{c.saved}/{c.target}" if c.target else f"{c.saved}장"
-        self.capture_note.setText(
-            f"{reason + ' · ' if reason else ''}{count}  →  {c.dir}/"
+        # 패널이 한 줄뿐이라 폴더는 이름만 쓰고 전체 경로는 툴팁으로 보낸다.
+        self._set_note(
+            self.note,
+            f"{reason + ' · ' if reason else ''}{count}  →  {c.dir.name}/",
+            TEXT_PRIMARY,
         )
+        self.note.setToolTip(str(c.dir))
 
     @staticmethod
     def _set_note(label: QLabel, text: str, color: str) -> None:
