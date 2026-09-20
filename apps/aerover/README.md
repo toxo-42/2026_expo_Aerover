@@ -180,6 +180,27 @@ MSP 코드는 없다 — `pi_code/` 의 FC 연결은 **MAVLink 텔레메트리 �
 **한 바퀴에 50장을 다 손보지 않는다.** ③이 묶음마다 가장 선명한 한 장씩만 뽑아주므로
 10장으로 한 바퀴를 돌리고, 나온 `best.pt` 로 다음 바퀴를 사전라벨한다 (아래 "반복이 정상이다").
 
+명령은 전부 `apps/aerover/` 에서 돈다. 경로는 이 폴더(`config.ROOT`) 기준이라 저장소를
+옮겨도 같은 자리를 가리킨다. 위 ①~⑧ 이 만드는 것:
+
+```
+apps/aerover/
+├── sessions/<회차>/              수집본 원본 — 라벨 작업이 여기를 덮지 않는다
+│   ├── 000.jpg · 000.txt        autolabel 이 이미지 옆에 같은 이름으로 깐다
+│   └── classes.txt              person · vehicle (순서가 곧 클래스 번호)
+├── label/<회차>_r1/         ←   손으로 고치는 곳. pick 이 뽑아서 복사해 둔다
+├── review/<회차>_r1/            상자를 그린 확인용 사본 (언제든 다시 만든다)
+├── dataset/                     make_dataset 이 만든다
+│   ├── data.yaml                학습이 읽는 설명서 (경로 · 클래스)
+│   ├── images/train · val
+│   └── labels/train · val       이미지와 같은 이름의 .txt
+├── runs/<name>/weights/best.pt  train 의 결과
+└── models/best.pt           ←   앱이 읽는 자리 (없으면 models/yolo11n.pt 로 돈다)
+```
+
+`dataset/` · `runs/` · `review/` · `*.pt` 는 `.gitignore` 가 뺀다 — 전부 다시 만들 수 있다.
+**남겨야 하는 원본은 `sessions/` 와 `label/` 의 `.txt` 뿐이다** (이미지는 `*.jpg` 규칙으로 빠진다).
+
 ### 데이터를 어떻게 모으는가 (①)
 
 - **반드시 파이 카메라로.** 웹캠으로 모으면 고도·내려다보는 각도·6mm 광각 왜곡이 전부 달라 효과가 없다.
@@ -266,11 +287,18 @@ uv run python -m tools.make_dataset sessions/a sessions/b --val 0.2
 
 ```bash
 uv run python -m tools.train --device cpu --install      # --install 이 models/best.pt 로 복사한다
+uv run python -m tools.train --batch 4                   # 메모리 16GB 맥(mps) — 기본 16 이면 넘친다
 ```
 
+기본값은 `tools/train.py` 머리에 있다 — `EPOCHS 300` · `IMGSZ 1280` · `PATIENCE 100` · `BASE yolo11n.pt`.
+
 - 출발점은 `yolo11n.pt` 다. **처음부터 배우지 않는다** — 수백 장으로는 사물 인식을 새로 만들 수 없고, 이미 사람을 아는 모델을 **모형도 사람으로 보도록 옮기는 것**이 목표다.
-- `imgsz` 기본값이 960 이다. 모형이 작아서 640 이면 몇 픽셀로 뭉개진다.
-- 항공 시점이라 상하 뒤집기 증강(`flipud`)만 올렸다. 나머지 증강은 ultralytics 기본값 그대로 — 옵션은 한 번에 하나씩 바꾼다.
+- `imgsz` 기본값이 1280 이다. 수집본 원본 크기고, 줄이면 20~30픽셀짜리 모형이 뭉개진다.
+- `--batch` 기본 16. **메모리 16GB 맥에서 `imgsz 1280` 이면 4 로 줄인다.**
+- `patience 100` — val 이 몇 장뿐이라 점수가 출렁인다. 성급히 멈추지 않으려는 값이다.
+- 증강을 기본값보다 세게 준다 (`AUGMENT` = `flipud` · `degrees` · `scale` · `translate` · `hsv_v`).
+  장면이 하나뿐이라 모델이 사람의 생김새 대신 이 벽돌벽 · 이 조명을 단서로 삼아버리기 때문이다.
+  옵션은 한 번에 하나씩 바꾼다. 다만 **배치를 바꿔 다시 찍는 것이 늘 더 낫다.**
 
 ### 반복이 정상이다
 
