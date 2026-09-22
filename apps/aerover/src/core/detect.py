@@ -33,6 +33,10 @@ CONF_FLOOR = 0.05
 
 # 사전학습(COCO) 클래스를 person / vehicle 로 통합한다 — `camtest.py` 의 KEEP 과 같은 표.
 # 표에 없는 클래스는 버린다. **팀 학습본(best.pt)에는 적용하지 않는다** (아래 `_is_coco`).
+#
+# **여기서 casualty(요구조자)는 나오지 않는다.** COCO 는 쓰러진 사람과 서 있는 사람을
+# 구분하지 않아 전부 person 이다. 그 구분은 팀 학습본만 하고, 학습 라벨은 사람이 직접
+# 단다 (`tools/autolabel.py` 의 CLASSES).
 COCO_KEEP: dict[str, str] = {
     "person": "person",
     "car": "vehicle", "bus": "vehicle", "truck": "vehicle",

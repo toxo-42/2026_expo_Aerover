@@ -8,7 +8,8 @@
 특히 잔해에 누운 모형은 자동으로 거의 안 잡히므로, 상자가 없는 자리를 미리 눈에
 익혀두고 도구에서 그 자리만 그리면 빠르다.
 
-색: 빨강 = person, 파랑 = vehicle.
+색: 빨강 = casualty(요구조자), 파랑 = vehicle, 노랑 = person(일반).
+`tools/label_gui.py` 와 같은 색이다 — 여기서 눈에 익힌 색으로 도구에서 바로 찾는다.
 """
 from __future__ import annotations
 
@@ -24,7 +25,8 @@ from tools import use_utf8_stdout                    # noqa: E402
 from tools.autolabel import CLASSES                  # noqa: E402
 from src.core.imgcheck import list_images            # noqa: E402
 
-COLORS = [(255, 40, 40), (0, 170, 255)]     # CLASSES 순서와 같다
+# CLASSES 순서와 같다. label_gui.py 의 COLORS 와 같은 색이어야 한다 (모듈 주석).
+COLORS = [(239, 68, 68), (0, 144, 255), (250, 204, 21)]
 WIDTH = 3
 
 
@@ -69,7 +71,8 @@ def main(argv: list[str] | None = None) -> None:
         drawn += 1
 
     print(f"{drawn}장에 상자 {total}개를 그렸다 -> {out_dir}")
-    print(f"색: {CLASSES[0]}=빨강, {CLASSES[1]}=파랑")
+    names = ["빨강", "파랑", "노랑"]
+    print("색: " + ", ".join(f"{c}={names[i]}" for i, c in enumerate(CLASSES)))
 
 
 if __name__ == "__main__":
