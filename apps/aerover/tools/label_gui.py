@@ -16,7 +16,10 @@
     좌클릭 드래그   상자 그리기 (현재 클래스로)
     상자 안 클릭    선택 (겹쳐 있으면 가장 작은 상자가 잡힌다)
     Delete          선택한 상자 지우기
-    1 / 2           클래스 바꾸기 (person / vehicle). 선택 중이면 그 상자의 클래스도 바뀐다
+    1 / 2 / 3       클래스 바꾸기. 선택 중이면 그 상자의 클래스도 바뀐다
+                      1 casualty  빨강 — 인명피해가 있는 요구조자 (쓰러진·깔린 사람)
+                      2 vehicle   파랑 — 차량
+                      3 person    노랑 — 일반 사람 (서 있거나 걷는, 구조대원 포함)
     휠              확대 · 축소       가운데 버튼 드래그  이동
     F               화면에 맞추기
     A / D           이전 · 다음 장    (넘어갈 때 자동 저장)
@@ -49,7 +52,10 @@ from tools.autolabel import CLASSES                                        # noq
 from tools.labelio import Box, load, pick, save, zoom_at                   # noqa: E402
 from src.core.imgcheck import list_images                                  # noqa: E402
 
-COLORS = ["#EF4444", "#0090FF"]         # CLASSES 순서와 같다
+# CLASSES 순서와 같다. **테두리 색이 곧 클래스다** — 몇 시간짜리 작업이라 이름표를
+# 읽는 대신 색으로 구분해야 손이 빠르다. 빨강은 제일 먼저 눈에 걸려야 하는 요구조자,
+# 노랑은 일반 사람 (빨강과 헷갈리지 않아야 한다).
+COLORS = ["#EF4444", "#0090FF", "#FACC15"]
 SELECTED = "#22C55E"
 MIN_DRAG = 3.0                          # 이보다 작게 끌면 상자가 아니라 클릭으로 본다
 ZOOM_STEP = 1.25
@@ -288,9 +294,10 @@ class LabelWindow(QMainWindow):
             if 0 <= b.cls < len(counts):
                 counts[b.cls] += 1
         detail = " · ".join(f"{name} {counts[i]}" for i, name in enumerate(CLASSES))
+        keys = "/".join(str(i + 1) for i in range(len(CLASSES)))
         self.status.setText(
             f"  [{self.index + 1}/{len(self.images)}] {self.images[self.index].name}   "
-            f"{detail}   |  그릴 클래스: {CLASSES[self.canvas.cls]} (1/2)   "
+            f"{detail}   |  그릴 클래스: {CLASSES[self.canvas.cls]} ({keys})   "
             f"|  A·D 이동   휠 확대   F 맞춤   Del 삭제   Ctrl+Z 되돌리기"
             + ("   |  저장함" if saved else ""))
 
