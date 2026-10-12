@@ -10,7 +10,7 @@ from pyodm.exceptions import NodeResponseError, OdmError, TaskFailedError    # n
 from pyodm.types import TaskStatus                        # noqa: E402
 
 from src.core import odm                                  # noqa: E402
-from src.core.odm import ASSETS, Cancelled, OdmJob, extract_assets, stage_text   # noqa: E402
+from src.core.odm import ALIGN_ASSETS, ASSETS, Cancelled, OdmJob, extract_assets, stage_text   # noqa: E402
 
 
 class Info:
@@ -152,6 +152,27 @@ def test_extract_assets_requires_every_asset(tmp_path):
     with pytest.raises(OdmError):
         extract_assets(zpath, tmp_path)
     assert not (tmp_path / "model.glb").exists()
+
+
+def test_extract_assets_takes_align_files_when_present(tmp_path):
+    zpath = tmp_path / "all.zip"
+    with zipfile.ZipFile(zpath, "w") as z:
+        for name in {**ASSETS, **ALIGN_ASSETS}:
+            z.writestr(name, b"payload-" + name.encode())
+    assert extract_assets(zpath, tmp_path) == []
+    for src, out in ALIGN_ASSETS.items():
+        assert (tmp_path / out).read_bytes() == b"payload-" + src.encode()
+
+
+def test_extract_assets_skips_missing_align_files(tmp_path):
+    """정합 파일이 없는 옛 작업도 ③ 은 성공해야 한다."""
+    zpath = tmp_path / "all.zip"
+    with zipfile.ZipFile(zpath, "w") as z:
+        for name in ASSETS:
+            z.writestr(name, b"x")
+    assert extract_assets(zpath, tmp_path) == list(ALIGN_ASSETS)
+    assert (tmp_path / "model.glb").exists()
+    assert not any((tmp_path / out).exists() for out in ALIGN_ASSETS.values())
 
 
 def test_stage_text_strips_log_noise_and_truncates():

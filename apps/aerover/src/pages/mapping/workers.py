@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
-from src.core import cropper
+from src.core import cropper, wframe
 from src.core.imgcheck import check_folder
 
 
@@ -40,15 +40,53 @@ class CropWorker(QThread):
     finished_ok = Signal(object)      # cropper.CropResult
     failed = Signal(str)
 
-    def __init__(self, scene, out: Path, lo, hi, plane, parent=None) -> None:
+    def __init__(self, scene, out: Path, lo, hi, plane, parent=None, **kw) -> None:
         super().__init__(parent)
         self.scene, self.out, self.lo, self.hi, self.plane = scene, out, lo, hi, plane
+        self.kw = kw        # cropper.crop 에 그대로 — W 자동 크롭은 to_w · pad
 
     def cancel(self) -> None:
         """`shutdown()` 규약을 맞춘다. 3.6초짜리라 중간에 끊지 않고 끝나길 기다린다."""
 
     def run(self) -> None:
         try:
-            self.finished_ok.emit(cropper.crop(self.scene, self.out, self.lo, self.hi, self.plane))
+            self.finished_ok.emit(cropper.crop(self.scene, self.out, self.lo, self.hi, self.plane,
+                                                  **self.kw))
+        except Exception as e:
+            self.failed.emit(f"{type(e).__name__}: {e}")
+
+
+class _Cancelled(Exception):
+    pass
+
+
+class AlignWorker(QThread):
+    """③ 이 끝난 회차를 시연 좌표계 W 에 정합해 `to_W.json` 을 만든다 (`wframe.make_to_w`).
+
+    사진마다 마커를 검출해 폰 사진 111장에 약 140초가 든다. 취소는 사진 한 장 단위로 걸린다.
+    """
+
+    progress = Signal(int, int)       # (done, total)
+    finished_ok = Signal(object)      # wframe.AlignSummary
+    failed = Signal(str)
+
+    def __init__(self, model_dir: Path, parent=None) -> None:
+        super().__init__(parent)
+        self.model_dir = model_dir
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def _on_progress(self, done: int, total: int) -> None:
+        if self._cancel:
+            raise _Cancelled
+        self.progress.emit(done, total)
+
+    def run(self) -> None:
+        try:
+            self.finished_ok.emit(wframe.make_to_w(self.model_dir, progress=self._on_progress))
+        except _Cancelled:
+            pass
         except Exception as e:
             self.failed.emit(f"{type(e).__name__}: {e}")

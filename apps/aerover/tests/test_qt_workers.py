@@ -5,7 +5,9 @@ import socket
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 QtCore = pytest.importorskip("PySide6.QtCore")
@@ -275,6 +277,29 @@ def test_detect_worker_reports_detector_error(app):
     assert errors == ["탐지 중단 — no model"]
 
 
+def test_detect_worker_locates_box_centers(app):
+    """locator 가 있으면 박스 **중앙** 픽셀을 넘기고, 메시에 안 맞은(NaN) 박스는 뺀다."""
+    got, asked = [], []
+
+    loc = SimpleNamespace(markers=3, points=np.array([[1.0, 2.0, 3.0], [np.nan] * 3]))
+
+    def locator(gray, uv):
+        asked.append((gray.shape, uv.tolist()))
+        return loc
+
+    w = DetectWorker(conf=0.5, detector=lambda f: [("person", 0.9, 0, 0, 10, 20),
+                                                   ("person", 0.8, 4, 4, 6, 6)])
+    w.locator = locator
+    w.located.connect(lambda r, pts: got.append((r, pts)), Qt.ConnectionType.DirectConnection)
+    w.start()
+    w.submit(QImage(40, 30, QImage.Format.Format_RGB888))
+    assert _wait(lambda: got)
+    w.stop()
+    assert w.wait(2000)
+    assert asked[0] == ((30, 40), [[5.0, 10.0], [5.0, 5.0]])
+    assert got[0] == (loc, [(("person", 0.9, 0, 0, 10, 20), (1.0, 2.0, 3.0))])   # 결과는 그대로 넘긴다
+
+
 def test_qimage_to_bgr_matches_pixels_despite_row_padding():
     # 폭 3 → 한 줄이 9바이트인데 QImage 는 4바이트로 정렬해 12바이트를 쓴다.
     # 패딩을 안 잘라내면 두 번째 줄부터 색이 밀린다.
@@ -359,3 +384,59 @@ def test_zoom_at_keeps_point_under_cursor():
     new_offset = zoom_at(offset, zoom, zoom * 4, cursor)
     after = ((cursor[0] - new_offset[0]) / (zoom * 4), (cursor[1] - new_offset[1]) / (zoom * 4))
     assert abs(after[0] - before[0]) < 1e-6 and abs(after[1] - before[1]) < 1e-6
+
+
+# ---- ③→④ 정합 워커 ----
+
+def test_align_worker_reports_progress_and_summary(monkeypatch):
+    """`wframe.make_to_w` 를 가짜로 — 진행률을 흘리고 요약을 낸다. run() 을 직접 불러 같은 스레드에서 본다."""
+    from src.core import wframe
+    from src.pages.mapping.workers import AlignWorker
+
+    summary = wframe.AlignSummary(40, [0, 1], 2.3, 6.8)
+
+    def fake(model_dir, images=None, progress=None):
+        for i in range(1, 4):
+            progress(i, 3)
+        return summary
+
+    monkeypatch.setattr(wframe, "make_to_w", fake)
+    w = AlignWorker(Path("/x"))
+    got, prog, err = [], [], []
+    w.progress.connect(lambda d, t: prog.append((d, t)))
+    w.finished_ok.connect(got.append)
+    w.failed.connect(err.append)
+    w.run()
+    assert prog == [(1, 3), (2, 3), (3, 3)] and got == [summary] and err == []
+
+
+def test_align_worker_cancel_and_failure(monkeypatch):
+    """취소하면 아무 결과도 안 내고 멈춘다. 계산이 실패하면 failed 로 이유를 낸다."""
+    from src.core import wframe
+    from src.pages.mapping.workers import AlignWorker
+
+    calls = []
+
+    def slow(model_dir, images=None, progress=None):
+        for i in range(1, 100):
+            calls.append(i)
+            progress(i, 99)
+        return "끝까지 돌면 안 된다"
+
+    monkeypatch.setattr(wframe, "make_to_w", slow)
+    w = AlignWorker(Path("/x"))
+    got, err = [], []
+    w.finished_ok.connect(got.append)
+    w.failed.connect(err.append)
+    w.progress.connect(lambda d, t: w.cancel() if d == 2 else None)
+    w.run()
+    assert calls == [1, 2, 3] and got == [] and err == []
+
+    def broken(model_dir, images=None, progress=None):
+        raise ValueError("삼각측량한 코너가 0개뿐이다")
+
+    monkeypatch.setattr(wframe, "make_to_w", broken)
+    w = AlignWorker(Path("/x"))
+    w.failed.connect(err.append)
+    w.run()
+    assert err == ["ValueError: 삼각측량한 코너가 0개뿐이다"]

@@ -13,6 +13,9 @@
 둘 다 끝나면 회차 폴더에 두 파일이 떨어진다 (`ASSETS`).
   `model.glb`        ⑤ 뷰포트가 띄운다
   `point_cloud.laz`  ④ 배경 제거의 평면도 원본 후보
+결과에 있으면 좌표계 정합용 두 파일도 꺼낸다 (`ALIGN_ASSETS`, 없어도 실패하지 않는다).
+  `shots.geojson`    장별 카메라 포즈      ┐ aruco/align.py 가 마커를 삼각측량해
+  `cameras.json`     ODM 이 추정한 내부값  ┘ 3D 맵을 시연 좌표계로 옮기는 데 쓴다
 
 **`odm_filterpoints/point_cloud.ply` 는 all.zip 에 들어 있지 않다.** 컨테이너
 디스크에는 있지만 NodeODM 이 기본 묶음에서 뺀다. 대신
@@ -50,7 +53,9 @@ _STRIP_PREFIX = re.compile(
 # **1차·1차-B 가 통과한 바로 그 옵션 조합이다.** 임의로 바꾸지 않는다.
 # `gltf` 가 없으면 GLB 가 안 나오고 obj 만 떨어진다 — ⑤ 뷰포트가 못 읽는다.
 # 옵션을 바꿀 때는 한 번에 하나씩 (콘티 3절, 처리 1회에 29분).
-OPTIONS: Mapping[str, object] = {"pc-ept": True, "cog": True, "gltf": True}
+# `pc-quality` 기본 medium 은 OpenMVS 를 `--resolution-level 3` 으로 돌려 4000px 사진을 약 500px 로
+# 줄여 깊이를 잰다 — 형상이 뭉개진다 (20261004_130739). high 는 1000px. ultra 는 Docker 10GB 로 부족하다.
+OPTIONS: Mapping[str, object] = {"pc-ept": True, "cog": True, "gltf": True, "pc-quality": "high"}
 
 # all.zip 안에서 우리가 쓰는 것은 이 둘뿐이다. 나머지 165MB 는 버린다.
 # LAZ 는 ③ 이 쓰지 않는다 — ④ 를 위해 지금 꺼내둔다. 처리 1회에 29분이 들어
@@ -58,6 +63,13 @@ OPTIONS: Mapping[str, object] = {"pc-ept": True, "cog": True, "gltf": True}
 ASSETS: Mapping[str, str] = {
     "odm_texturing/odm_textured_model_geo.glb": "model.glb",
     "odm_georeferencing/odm_georeferenced_model.laz": "point_cloud.laz",
+}
+
+# 좌표계 정합(aruco/align.py)이 읽는 것. 3D 맵을 띄우는 데는 필요 없으므로 없으면 건너뛴다 —
+# 이것 때문에 29분짜리 ③ 이 실패로 끝나면 안 된다. 크기는 합쳐서 수십 KB 다.
+ALIGN_ASSETS: Mapping[str, str] = {
+    "odm_report/shots.geojson": "shots.geojson",
+    "cameras.json": "cameras.json",
 }
 
 
@@ -93,16 +105,22 @@ def stage_text(info, expected_min: int = EXPECTED_MIN, width: int = STAGE_CHARS)
     return f"{line} · {elapsed}" if line else elapsed
 
 
-def extract_assets(zip_path: Path, dest: Path, assets: Mapping[str, str] = ASSETS) -> None:
-    """all.zip 에서 필요한 파일만 꺼낸다. 없는 게 있으면 아무것도 안 꺼내고 OdmError."""
+def extract_assets(zip_path: Path, dest: Path, assets: Mapping[str, str] = ASSETS,
+                   optional: Mapping[str, str] = ALIGN_ASSETS) -> list[str]:
+    """all.zip 에서 필요한 파일만 꺼낸다. `assets` 중 없는 게 있으면 아무것도 안 꺼내고 OdmError.
+
+    `optional` 은 있는 것만 꺼낸다. 돌려주는 값은 결과에 없어 건너뛴 선택 파일 이름.
+    """
     with zipfile.ZipFile(zip_path) as z:
         names = set(z.namelist())
         missing = [a for a in assets if a not in names]
         if missing:
             raise OdmError(f"결과에 없는 파일: {missing}. gltf 옵션 없이 처리된 작업일 수 있다")
-        for src, out in assets.items():
+        present = {src: out for src, out in optional.items() if src in names}
+        for src, out in {**assets, **present}.items():
             with z.open(src) as f, open(dest / out, "wb") as g:
                 shutil.copyfileobj(f, g)
+    return [src for src in optional if src not in present]
 
 
 # ---- 작업 ----
