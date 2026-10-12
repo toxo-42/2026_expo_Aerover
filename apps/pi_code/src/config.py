@@ -33,6 +33,7 @@ RTP_MTU         = 1400                                        # Wi-Fi MTU 1500 �
 GCS_TIMEOUT_SEC = 3.0                                         # 지상국 HEARTBEAT 가 이보다 오래 없으면 스트림을 멈춘다
 FC_SERIAL       = _env("DRONECAM_FC_SERIAL", "")              # FC 의 MAVLink UART 장치. 비면 텔레메트리 중계 안 함
 FC_BAUD         = int(_env("DRONECAM_FC_BAUD", "57600"))      # INAV MAVLink 텔레메트리 기본 보레이트
+LOCAL_MAVLINK_PORT = int(_env("DRONECAM_LOCAL_MAVLINK_PORT", "14551"))  # 파이 안의 다른 프로세스(drive_server.py 배터리)가 지상국에 보낼 MAVLink 를 넣는 포트
 
 # ---- 옛 TCP 스트림 (tcp) ----
 

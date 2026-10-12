@@ -111,7 +111,7 @@ python -m pytest                    # 테스트 — 파이 밖에서도 돈다 (
 | `secound.py` | 07-03 | 30초 mp4 녹화 | 보관만 |
 | `cam_server.py.bak` / `.20260907bak` / `.20260909bak` | | 수정 전 백업 | 보관만 |
 
-systemd 유닛(`aerover-cam.service`, `dronecam.service`)도 파이 시스템 경로에 있고 이 폴더에는 없다.
+systemd 유닛(`aerover-cam.service`, `aerover-drive.service`, `dronecam.service`)도 파이 시스템 경로에 있고 이 폴더에는 없다.
 
 ## 부품
 
@@ -146,6 +146,7 @@ systemd 유닛(`aerover-cam.service`, `dronecam.service`)도 파이 시스템 �
 ## 프로그램별 동작
 
 - **stream** — UDP. MAVLink 포트 14550 에서 지상국 HEARTBEAT 와 `VIDEO_START_STREAMING` 을 받으면 카메라를 열어 **그 지상국 주소의 5004** 로 RTP/JPEG 를 보낸다. `VIDEO_STOP_STREAMING` 이 오거나 지상국 HEARTBEAT 가 3초 끊기면 카메라를 놓는다. 1280x960, raw 2028x1520(풀센서 4:3 화각), 180도 회전. `DRONECAM_FC_SERIAL` 을 주면 FC 의 MAVLink 텔레메트리를 같은 소켓으로 중계한다. 받는 쪽은 `aerover/src/core/link.py` 의 `RtpLinkWorker`.
+- **drive_server.py** (주행 · 모터보드) — UDP 9000 으로 `drone_remote/drive_gui.py` 의 duty 를 받아 `motor_link.py`(G031 TB6612, `/dev/ttyAMA5`)로 흘린다. 1초마다 모터보드 배터리 전압을 읽어 MAVLink SYS_STATUS(컴포넌트 180 `MAV_COMP_ID_BATTERY`)로 `127.0.0.1:14551` 에 넘기면 (잔량 % 는 6S 셀 전압을 LiPo 곡선에 대어 계산) `stream` 이 지상국으로 중계한다. 지상국은 이 컴포넌트의 배터리값만 쓰고 FC 배터리값(USB 전원 ≈4.2V)은 무시한다. pymavlink 없이 돈다(SYS_STATUS 를 직접 패킹) — 시스템 `python` 으로도 실행된다. 평소엔 `aerover-drive.service`(enabled, 2026-10-11)가 부팅 때 띄운다. 손으로 돌릴 땐 먼저 `sudo systemctl stop aerover-drive` (UDP 9000 · `/dev/ttyAMA5` 를 한 프로세스만 연다).
 - **tcp** — 옛 방식, 포트 5001. 접속마다 카메라를 열어 `[4바이트 길이][JPEG]` 를 보내고, 끊기면 카메라 해제. 5초 안에 못 보내면 끊긴 것으로 보고 다음 접속을 받는다. 지상국은 `AEROVER_LINK=tcp`.
 - **record** — 카메라를 켜둔 채 대기하다 버튼(GPIO17)·`cam` 명령으로 H.264 1080p30 녹화. LED(GPIO27): 대기 2초 깜빡 / 녹화 점등 / 경고 빠른 점멸. 제어 소켓 `run/control.sock` (`DRONECAM_SOCK` 으로 변경). 길게 눌러 종료는 `ButtonSettings.enable_hold_exit` 로 켜며 기본은 꺼짐(원본과 같음).
 - **web** — 카메라 하나에 인코더 두 개: main 1920x1080 → H.264 녹화, lores 640x360 → MJPEG 미리보기. 녹화 파일은 record 와 같은 `rec/flight_*` 형식.
