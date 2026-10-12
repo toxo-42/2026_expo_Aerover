@@ -21,6 +21,12 @@ pyodm==1.5.13                   # NodeODM 제출·폴링
 pyserial==3.5                   # 텔레메트리 — CRSF over USB VCP
 pymavlink==2.4.49               # 파이와 UDP 로 이야기하는 MAVLink (제어 · FC 텔레메트리 중계)
 ultralytics==8.4.48             # YOLO 추론 — torch 를 같이 끌고 온다 (설치 수 GB)
+torch==2.14.0                   # pyproject 와 같은 버전. 윈도우 NVIDIA 는 CUDA 빌드로 먼저 깐다 (아래)
+torchvision==0.29.0
+
+# 윈도우 + NVIDIA GPU: requirements 전에 CUDA 빌드를 먼저 깔아 둔다 (드라이버 560 이상, 시스템 CUDA 무관):
+#   pip install torch==2.14.0 torchvision==0.29.0 --index-url https://download.pytorch.org/whl/cu126
+# 그다음 `pip install -r requirements.txt` 는 이미 맞는 버전이 있어 torch 를 다시 받지 않는다.
 
 # ultralytics 는 opencv-python(비 headless)을 요구한다. 그런데 그건 자기 Qt5 를 같이 들고 와
 # PySide6 와 부딪칠 수 있어, 설치 뒤 headless 로 되돌린다 (cv2 는 어느 쪽이든 같다):

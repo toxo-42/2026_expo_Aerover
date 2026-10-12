@@ -17,7 +17,22 @@ dependencies = [
     "pymavlink==2.4.49",                # 파이와 UDP 로 이야기하는 MAVLink (제어 · FC 텔레메트리 중계)
     "ultralytics==8.4.48",              # YOLO 추론 (torch 를 같이 끌고 온다 — 설치가 크다). 지연 import 라 없어도 앱은 뜬다
     # opencv-python 을 딸려 오는데 위 headless 로 되돌려 쓴다 — requirements.txt 주석 참고
+    # ultralytics 가 끌고 오는 것을 직접 적는다 — 아래 [tool.uv.sources] 는 직접 의존성에만 걸린다
+    "torch==2.14.0",
+    "torchvision==0.29.0",
 ]
+
+# 윈도우(데스크탑, NVIDIA GPU)는 CUDA 빌드를 받는다. 맥·리눅스는 PyPI 그대로.
+# 휠에 CUDA 런타임이 들어 있어 시스템 CUDA · cuDNN 버전과는 무관하다 — 드라이버만 맞으면 된다.
+# cu126 은 드라이버 560 이상 (cu130 은 580 이상이라 피했다). torch 를 올리면 이 인덱스에 그 버전이 있는지 확인.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu126", marker = "sys_platform == 'win32'" }]
+torchvision = [{ index = "pytorch-cu126", marker = "sys_platform == 'win32'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true     # torch · torchvision 만 여기서 — 나머지 패키지는 PyPI
 
 [dependency-groups]
 dev = ["pytest>=8"]                     # uv sync 가 같이 깐다. 실행: uv run pytest

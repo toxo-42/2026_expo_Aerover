@@ -24,6 +24,24 @@ python app.py
 python -m pytest
 ```
 
+### 윈도우 데스크탑 (NVIDIA GPU)
+
+clone 만 하면 탐지 가중치(`models/best.pt`)와 드론 메시까지 같이 온다. `uv sync` 는 윈도우에서만
+torch · torchvision 을 **CUDA 빌드(cu126)** 로 받는다 (`pyproject.toml` 의 `[tool.uv.sources]`).
+휠에 CUDA 런타임이 들어 있어 시스템 CUDA · cuDNN 버전과는 무관하고, **NVIDIA 드라이버 560 이상**이면 된다.
+
+```powershell
+uv sync
+uv run python -c "import torch; print(torch.__version__, torch.cuda.is_available())"   # 2.14.0+cu126 True 여야 한다
+uv run python app.py
+```
+
+- `False` 면 드라이버 버전부터 본다 (`nvidia-smi` 오른쪽 위 "Driver Version"). YOLO 는 GPU 가 보이면 알아서 쓴다.
+- 환경변수는 PowerShell 문법으로 준다 — `$env:AEROVER_PI_HOST="192.168.0.4"; uv run python app.py`
+- 3D 맵(`3D_model/`)은 저장소에 없다 — 이 PC 에서 NodeODM 을 띄우고([NodeODM 띄우기](#nodeodm-띄우기)) 매핑 페이지에서
+  ① → ⑤ 를 돌린다. ③ 이 끝나면 마커로 정합해 `to_W.json` 이 생기고, 그 맵을 탐지 페이지에서 고르면 핀이 찍힌다.
+- pip 로 만들 때는 `requirements.txt` 머리말의 CUDA 설치 줄을 따른다.
+
 ### 장비 없이 — 사진 재생 (가짜 파이)
 
 드론이 없어도 수집 사진을 영상처럼 흘려 탐지 · 3D 맵 핀 · 카메라 위치까지 실제 경로 그대로 확인한다 (`tools/fake_pi.py`).
