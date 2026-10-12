@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 from PySide6.QtGui import QMatrix4x4, QVector3D
 
 UP = QVector3D(0.0, 0.0, 1.0)
@@ -95,6 +96,33 @@ class OrbitCamera:
         far = self.distance * 20.0 + 100.0
         m.perspective(self.fov_deg, w / max(1, h), near, far)
         return m
+
+    def project(self, points: np.ndarray, w: int, h: int) -> np.ndarray:
+        """3D 점 (N,3) → 위젯 픽셀 (N,2), 왼쪽 위 원점. 카메라 뒤의 점은 NaN.
+
+        `paintGL` 과 같은 행렬이다 — 종횡비만 같으면 논리 픽셀로 넘겨도 된다.
+        """
+        m = self.projection(w, h) * self.view()
+        M = np.array(m.data(), float).reshape(4, 4).T      # Qt 는 열 우선으로 내준다
+        p = np.asarray(points, float).reshape(-1, 3)
+        clip = np.c_[p, np.ones(len(p))] @ M.T
+        out = np.full((len(p), 2), np.nan)
+        ok = clip[:, 3] > 1e-9
+        ndc = clip[ok, :2] / clip[ok, 3:4]
+        out[ok] = np.c_[(ndc[:, 0] + 1) / 2 * w, (1 - ndc[:, 1]) / 2 * h]
+        return out
+
+    def world_per_px(self, points: np.ndarray, h: int) -> np.ndarray:
+        """점 (N,3) 마다 화면 1픽셀이 차지하는 실제 길이 (N,). 화면에서 크기가 일정한 표시(핀)에 쓴다.
+
+        원근 투영: 깊이 d 에서 화면 높이 전체 = 2·d·tan(fov/2). 깊이는 시선 방향 성분이다.
+        """
+        e, t = self.eye(), self.target
+        eye = np.array([e.x(), e.y(), e.z()])
+        fwd = np.array([t.x(), t.y(), t.z()]) - eye
+        fwd /= max(np.linalg.norm(fwd), 1e-12)
+        depth = np.maximum((np.asarray(points, float).reshape(-1, 3) - eye) @ fwd, 1e-6)
+        return 2 * depth * math.tan(math.radians(self.fov_deg) / 2) / max(1, h)
 
     def _basis(self) -> tuple[QVector3D, QVector3D]:
         forward = (self.target - self.eye()).normalized()

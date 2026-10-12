@@ -3,6 +3,8 @@
 남길 영역은 사람이 평면도에서 드래그로 고른다 (`ui/planview.py`, 콘티 3절).
 자동화는 못 한다 — GPS 없이 재구성하면 ODM 좌표계는 회차마다 원점·축·스케일이
 전부 임의라 경계값을 코드에 박을 수 없다. 자동화하려면 3차(ArUco→GCP)가 먼저다.
+→ 회차에 `to_W.json` 이 있으면 **자동**이다: 시연 좌표계 W 에서 판은 늘 같은 자리라
+  상수 상자(`core/wframe.py` 의 `CROP_LO/HI`)로 자른다 (`crop(..., to_w=M)`).
 
 ### 평면도 원본을 점군이 아니라 메시 정점에서 뽑는다
 
@@ -115,11 +117,13 @@ class CropBox:
 def crop(scene: trimesh.Scene, out: str | Path,
          lo: np.ndarray, hi: np.ndarray, plane: np.ndarray | None = None,
          pad: float = PAD, tex_max: int = TEX_MAX,
-         progress: Callable[[int, int], None] | None = None) -> CropResult:
+         progress: Callable[[int, int], None] | None = None,
+         to_w: np.ndarray | None = None) -> CropResult:
     """상자로 메시를 잘라 GLB 로 내보낸다.
 
     `lo`/`hi` 의 세 번째 성분은 `plane` 이 있으면 **바닥 위 높이**, 없으면 z 다.
     `plane=None` 이면 축정렬 상자가 된다.
+    `to_w`(ODM→W 4x4)가 있으면 상자는 **W 좌표**다 — 판정만 W 에서 하고 저장은 ODM 좌표 그대로.
     """
     box = CropBox(lo, hi, plane).padded(pad)
     kept: dict[str, trimesh.Trimesh] = {}
@@ -131,7 +135,7 @@ def crop(scene: trimesh.Scene, out: str | Path,
         geom = scene.geometry[gname]
         n_before += len(geom.faces)
 
-        piece = crop_geometry(geom, T, box, tex_max)
+        piece = crop_geometry(geom, T, box, tex_max, to_w)
         if piece is not None:
             kept[gname] = piece
             n_after += len(piece.faces)
@@ -144,10 +148,12 @@ def crop(scene: trimesh.Scene, out: str | Path,
 
 
 def crop_geometry(geom: trimesh.Trimesh, T: np.ndarray, box: CropBox,
-                  tex_max: int = TEX_MAX) -> trimesh.Trimesh | None:
+                  tex_max: int = TEX_MAX, to_w: np.ndarray | None = None) -> trimesh.Trimesh | None:
     """중심이 상자 안인 삼각형만 남긴 복사본. 하나도 안 남으면 None. 원본은 건드리지 않는다."""
     V = trimesh.transform_points(geom.vertices, T)
     centers = V[geom.faces].mean(axis=1)
+    if to_w is not None:
+        centers = trimesh.transform_points(centers, to_w)     # 유사변환이라 중심은 중심으로 간다
     mask = box.contains(centers)
     if not mask.any():
         return None

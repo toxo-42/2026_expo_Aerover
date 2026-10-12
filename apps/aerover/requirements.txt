@@ -13,6 +13,7 @@ PySide6==6.11.2
 trimesh==5.1.0
 numpy==2.5.2
 pillow==12.3.0
+piexif==1.1.3                   # 서브샘플 사본에서 GPS EXIF 제거
 DracoPy==2.0.0                  # ODM 산출 GLB 는 Draco 압축 — 없으면 지오메트리가 안 읽힌다
 scipy==1.18.1                   # trimesh 법선 계산 가속
 opencv-python-headless==5.0.0.93  # 입력 검사 — 라플라시안 블러·ORB 매칭
