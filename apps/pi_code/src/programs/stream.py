@@ -4,6 +4,9 @@
     EXP=2500 GAIN=8 python app.py stream                   # 노출 고정 (실내 기준값)
     DRONECAM_FC_SERIAL=/dev/serial0 python app.py stream   # FC 의 MAVLink 텔레메트리도 중계
 
+127.0.0.1:LOCAL_MAVLINK_PORT 로 들어온 MAVLink 도 지상국에 그대로 중계한다 — 지상국 주소는
+이 프로세스만 알기 때문이다. 지금은 `drive_server.py` 가 모터보드 배터리 전압을 넣는다.
+
 동작: 지상국이 HEARTBEAT 와 VIDEO_START_STREAMING 을 보내면 카메라를 열어 그 주소로 RTP 를
 보낸다. VIDEO_STOP_STREAMING 이 오거나 지상국 HEARTBEAT 가 끊기면 카메라를 놓는다.
 옛 TCP 방식은 `python app.py tcp`.
@@ -15,8 +18,8 @@ from picamera2.encoders import JpegEncoder
 
 from src.camera.factory import open_stream_camera
 from src.camera.settings import StreamCameraSettings, exposure_controls_from_env
-from src.config import (FC_BAUD, FC_SERIAL, GCS_TIMEOUT_SEC, MAVLINK_PORT, RTP_MTU,
-                        RTP_PORT)
+from src.config import (FC_BAUD, FC_SERIAL, GCS_TIMEOUT_SEC, LOCAL_MAVLINK_PORT, MAVLINK_PORT,
+                        RTP_MTU, RTP_PORT)
 from src.control.camera_node import CameraNode
 from src.control.fc_bridge import open_fc_bridge
 from src.log import log
@@ -37,6 +40,8 @@ def open_camera():
 def main() -> None:
     mav_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     mav_sock.bind(("0.0.0.0", MAVLINK_PORT))
+    local_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    local_sock.bind(("127.0.0.1", LOCAL_MAVLINK_PORT))
     video_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     session = RtpStreamSession(
@@ -55,13 +60,16 @@ def main() -> None:
     bridge = open_fc_bridge(FC_SERIAL, FC_BAUD, node.forward)
 
     log(f"MAVLink 대기 중 (UDP {MAVLINK_PORT}) — 영상은 지상국 {RTP_PORT} 으로"
-        + (f", FC 중계 {FC_SERIAL}" if bridge else ""))
+        + (f", FC 중계 {FC_SERIAL}" if bridge else "")
+        + f", 로컬 중계 127.0.0.1:{LOCAL_MAVLINK_PORT}")
     try:
         while True:
-            readable, _, _ = select.select([mav_sock], [], [], POLL_SEC)
-            if readable:
+            readable, _, _ = select.select([mav_sock, local_sock], [], [], POLL_SEC)
+            if mav_sock in readable:
                 data, addr = mav_sock.recvfrom(4096)
                 node.receive(data, addr)
+            if local_sock in readable:
+                node.forward(local_sock.recv(4096))
             node.tick()
             if bridge is not None:
                 bridge.pump()
@@ -70,5 +78,6 @@ def main() -> None:
     finally:
         session.stop()
         mav_sock.close()
+        local_sock.close()
         video_sock.close()
         log("종료")

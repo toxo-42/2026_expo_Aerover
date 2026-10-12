@@ -27,3 +27,5 @@ apps/aerover/sessions/20260919_164512/
 *.pt
 dataset/
 runs/
+# 앱이 바로 쓰는 탐지 가중치는 올린다 — clone 만으로 다른 컴퓨터(윈도우 데스크탑)에서 돈다
+!apps/aerover/models/best.pt

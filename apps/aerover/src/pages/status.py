@@ -34,7 +34,8 @@ from src.core.capture import CaptureSession
 from src.core.link import LinkHub
 from src.ui.hud_icons import BatteryIcon, GpsIcon, LinkIcon
 from src.ui.metric import MetricRow
-from src.ui.palette import STATUS_OK_TEXT, STATUS_RED, TEXT_DIM, TEXT_PRIMARY, WARN_AMBER
+from src.ui.palette import (ACCENT_BLUE, STATUS_OK_TEXT, STATUS_RED, TEXT_DIM, TEXT_PRIMARY,
+                            WARN_AMBER)
 from src.ui.video import VideoView
 
 HUD_MARGIN = 16
@@ -49,6 +50,15 @@ MIN_SATS = 6  # 이하면 fix 를 신뢰하지 않는다
 BATT_WARN_PCT = 40
 BATT_CRIT_PCT = 20
 ALT_TOLERANCE = 0.10  # 목표 고도 ±10% 안이면 정상
+
+
+def battery_color(pct: int | None) -> str:
+    """잔량 % → 상태색. % 를 모르면(파이 모터보드는 전압만 보낸다) 판정 없이 기본 글자색."""
+    if pct is None:
+        return TEXT_PRIMARY
+    if pct < BATT_CRIT_PCT:
+        return STATUS_RED
+    return WARN_AMBER if pct < BATT_WARN_PCT else STATUS_OK_TEXT
 
 
 class TelemetryPanel(QFrame):
@@ -121,16 +131,9 @@ class TelemetryPanel(QFrame):
             return
         b = snap["battery"]
         pct = b["remaining_pct"]
-        color = (
-            STATUS_RED
-            if pct < BATT_CRIT_PCT
-            else WARN_AMBER
-            if pct < BATT_WARN_PCT
-            else STATUS_OK_TEXT
-        )
-        self.rows["BATT"].set(
-            f"{b['voltage']:.1f}V", f"{pct}% · {b['current']:.1f}A", color
-        )
+        color = battery_color(pct)
+        detail = f"{pct}% · {b['current']:.1f}A" if pct is not None else ""
+        self.rows["BATT"].set(f"{b['voltage']:.1f}V", detail, color)
 
     def _gps(self, snap) -> None:
         g = snap["gps"]
@@ -335,15 +338,10 @@ class StatusPage(QWidget):
         else:
             b = snap["battery"]
             pct = b["remaining_pct"]
-            color = (
-                STATUS_RED
-                if pct < BATT_CRIT_PCT
-                else WARN_AMBER
-                if pct < BATT_WARN_PCT
-                else STATUS_OK_TEXT
-            )
+            color = battery_color(pct)
             # 칩 문구는 이 한 줄에서 정한다. 아이콘은 pct 만 받아 따로 그린다.
-            self.chips["BATT"].set(f"{b['voltage']:.1f}V · {pct}%", color)
+            text = f"{b['voltage']:.1f}V" + (f" · {pct}%" if pct is not None else "")
+            self.chips["BATT"].set(text, color)
             self.icons["BATT"].set_level(pct, color)
 
         if tm.age(snap, "baro") is None:
@@ -385,6 +383,8 @@ class StatusPage(QWidget):
         self.hud.setGeometry(
             view.x(), view.y(), view.width(), self.hud.sizeHint().height()
         )
+        # 영상은 바 아래에만 그린다. 안 그러면 프레임 윗부분이 바에 가려 잘려 보인다.
+        self.video.set_top_inset(self.hud.height())
         self._place_osd()
         if not self.telemetry.isHidden():
             top = self.hud.geometry().bottom() + m
@@ -401,11 +401,11 @@ class StatusPage(QWidget):
         self.osd.move(view.x() + m, view.bottom() - m - self.osd.height() + 1)
 
     def _build_control(self) -> QFrame:
-        """하단 고정 패널 — 한 줄 3구역: 연결 | 진행 | 수집.
+        """하단 고정 패널 — 제목이 붙은 3구역: 연결 | 진행 | 수집 (Figma v2).
 
         가운데 구역이 늘어나는 칸이다. 빈 공간으로 두지 않고 진행바와 안내문을
-        둔다 — 연결·수집 상태 문구가 모두 여기 한 곳에 뜬다. 라벨 위젯은 두지
-        않고 상태 점·입력칸 prefix 로 대신해 폭을 아낀다.
+        둔다 — 연결·수집 상태 문구가 모두 여기 한 곳에 뜬다. 구역마다 상태 점이
+        하나씩 있다: 연결 = 링크 상태, 진행 = 수집 중인가, 수집 = 수집할 수 있는가.
         """
         box = QFrame()
         box.setObjectName("panel")
@@ -415,32 +415,30 @@ class StatusPage(QWidget):
 
         # ---- 연결 ----
         # 상태 점: 끊김(흐림) · 연결 중(앰버) · 연결됨(시안) · 실패(빨강)
-        self.link_dot = QLabel("●")
-        self.link_dot.setToolTip("파이 연결 상태")
-        self._set_dot(TEXT_DIM)
+        self.link_dot = self._dot("파이 연결 상태")
         # 파이 주소를 화면에서 바꾼다. 기존 코드는 세 파일에 하드코딩돼 있었다.
         self.addr = QLineEdit(f"{PI_HOST}:{PI_PORT}")
         self.addr.setFixedWidth(170)
         self.addr.setToolTip("파이 주소 (호스트:포트)")
         self.connect_btn = QPushButton("연결")
         self.connect_btn.clicked.connect(self._toggle_link)
-        row.addWidget(self.link_dot)
-        row.addWidget(self.addr)
-        row.addWidget(self.connect_btn)
+        row.addLayout(self._zone("연결", self.link_dot, self.addr, self.connect_btn))
         row.addWidget(self._sep())
 
         # ---- 진행 (늘어나는 칸) ----
+        self.progress_dot = self._dot("수집 중이면 블루")
         self.progress = QProgressBar()
         self.progress.setTextVisible(False)
         self.progress.setFixedWidth(160)
         self.progress.hide()
         self.note = QLabel("연결하면 수집할 수 있다")
         self.note.setObjectName("dim")
-        row.addWidget(self.progress)
-        row.addWidget(self.note, 1)
+        progress_zone = self._zone("진행", self.progress_dot, self.progress, self.note)
+        row.addLayout(progress_zone, 1)
         row.addWidget(self._sep())
 
         # ---- 수집 ----
+        self.capture_dot = self._dot("영상이 들어와 수집할 수 있으면 블루")
         self.interval = QDoubleSpinBox()
         self.interval.setRange(0.2, 30.0)
         self.interval.setSingleStep(0.5)
@@ -459,13 +457,41 @@ class StatusPage(QWidget):
         self.capture_btn.setEnabled(False)
         self.capture_btn.clicked.connect(self._toggle_capture)
 
-        row.addWidget(self.interval)
-        row.addWidget(self.target)
-        row.addWidget(self.capture_btn)
+        row.addLayout(self._zone("수집", self.capture_dot, self.interval, self.target,
+                                 self.capture_btn))
         return box
 
-    def _set_dot(self, color: str) -> None:
-        self.link_dot.setStyleSheet(f"color:{color}; font-size:18px;")
+    @staticmethod
+    def _zone(title: str, *widgets: QWidget) -> QVBoxLayout:
+        """구역 하나 — 제목 한 줄 아래에 위젯을 가로로 늘어놓는다. 마지막 위젯이
+        남는 폭을 받는다 (진행 구역의 안내문)."""
+        col = QVBoxLayout()
+        col.setSpacing(6)
+        head = QLabel(title)
+        head.setObjectName("zoneTitle")
+        col.addWidget(head)
+        line = QHBoxLayout()
+        line.setSpacing(8)
+        for w in widgets[:-1]:
+            line.addWidget(w)
+        line.addWidget(widgets[-1], 1)
+        col.addLayout(line)
+        return col
+
+    def _dot(self, tip: str) -> QLabel:
+        dot = QLabel("●")
+        dot.setToolTip(tip)
+        self._set_dot(dot, TEXT_DIM)
+        return dot
+
+    @staticmethod
+    def _set_dot(dot: QLabel, color: str) -> None:
+        dot.setStyleSheet(f"color:{color}; font-size:18px;")
+
+    def _sync_capture_dots(self) -> None:
+        """진행 = 수집 중인가, 수집 = 수집할 수 있는가 (영상이 들어오는 중)."""
+        self._set_dot(self.progress_dot, ACCENT_BLUE if self._saving else TEXT_DIM)
+        self._set_dot(self.capture_dot, ACCENT_BLUE if self.capture_btn.isEnabled() else TEXT_DIM)
 
     @staticmethod
     def _sep() -> QFrame:
@@ -494,7 +520,7 @@ class StatusPage(QWidget):
 
         self.addr.setEnabled(False)
         self.connect_btn.setText("해제")
-        self._set_dot(WARN_AMBER)
+        self._set_dot(self.link_dot, WARN_AMBER)
         self._set_note(self.note, "연결 중…", TEXT_DIM)
 
     def _stop_link(self) -> None:
@@ -511,16 +537,17 @@ class StatusPage(QWidget):
         self.capture_btn.setEnabled(False)
         self.video.clear()
         self.osd.hide()
+        self._sync_capture_dots()
         if not self._link_failed:
-            self._set_dot(TEXT_DIM)
+            self._set_dot(self.link_dot, TEXT_DIM)
 
     def _on_connected(self) -> None:
-        self._set_dot(STATUS_OK_TEXT)
+        self._set_dot(self.link_dot, STATUS_OK_TEXT)
         self._set_note(self.note, "연결됨 — 영상이 오면 수집할 수 있다", STATUS_OK_TEXT)
 
     def _on_failed(self, message: str) -> None:
         self._link_failed = True
-        self._set_dot(STATUS_RED)
+        self._set_dot(self.link_dot, STATUS_RED)
         self._set_note(self.note, message, STATUS_RED)
 
     def _on_frame(self, image: QImage, raw: bytes) -> None:
@@ -533,8 +560,9 @@ class StatusPage(QWidget):
         span = self._frame_times[-1] - self._frame_times[0]
         fps = (len(self._frame_times) - 1) / span if span > 0 else 0.0
         self.osd.setText(f"{image.width()}×{image.height()} · {fps:.1f} fps")
-        if self.osd.isHidden():
+        if self.osd.isHidden():      # 첫 프레임 — 이제 수집할 수 있다
             self.osd.show()
+            self._sync_capture_dots()
             if not self._saving:
                 self._set_note(self.note, "영상 수신 중 — 수집할 수 있다", STATUS_OK_TEXT)
         self._place_osd()      # 글자 폭이 바뀌면 크기를 다시 잡는다
@@ -559,6 +587,7 @@ class StatusPage(QWidget):
         self.progress.setVisible(bool(self.target.value()))
         self.progress.setMaximum(self.target.value() or 1)
         self.progress.setValue(0)
+        self._sync_capture_dots()
         self._update_capture_note()
 
     def _stop_capture(self, reason: str = "") -> None:
@@ -568,6 +597,7 @@ class StatusPage(QWidget):
         self.capture_btn.setText("수집 시작")
         self.interval.setEnabled(True)
         self.target.setEnabled(True)
+        self._sync_capture_dots()
         self._update_capture_note(reason)
 
     def _on_saved(self) -> None:

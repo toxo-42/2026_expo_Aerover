@@ -5,7 +5,7 @@ from pymavlink.dialects.v20 import common as mav    # noqa: E402
 
 from src.core.gcs import (CAMERA_COMPONENT_ID, CMD_VIDEO_START, CMD_VIDEO_STOP,   # noqa: E402
                           GcsEndpoint)
-from src.core.telemetry.mavlink import apply_mavlink   # noqa: E402
+from src.core.telemetry.mavlink import BATTERY_COMPONENT, apply_mavlink   # noqa: E402
 from src.core.telemetry.state import TelemetryStore    # noqa: E402
 
 
@@ -79,8 +79,11 @@ def test_apply_mavlink_maps_fc_messages_to_store_keys():
     store = TelemetryStore(clock=lambda: 5.0)
     gps = mav.MAVLink_gps_raw_int_message(0, 3, 375665000, 1269780000, 52400, 0, 0, 342, 27050, 9)
     att = mav.MAVLink_attitude_message(0, 0.1, -0.2, 3.0, 0, 0, 0)
-    sysst = mav.MAVLink_sys_status_message(0, 0, 0, 0, 16800, 1250, 77, 0, 0, 0, 0, 0, 0)
-    batt = mav.MAVLink_battery_status_message(0, 0, 0, 0, [16800] + [0xFFFF] * 9, 1250, 431, -1, 76)
+    board = mav.MAVLink(None, srcSystem=1, srcComponent=BATTERY_COMPONENT)
+    sysst = _received(board, board.sys_status_encode(0, 0, 0, 0, 16800, 1250, 77,
+                                                     0, 0, 0, 0, 0, 0).pack(board))
+    batt = _received(board, board.battery_status_encode(0, 0, 0, 0, [16800] + [0xFFFF] * 9,
+                                                        1250, 431, -1, 76).pack(board))
     hud = mav.MAVLink_vfr_hud_message(3.4, 3.5, 270, 40, 15.2, -0.3)
 
     assert apply_mavlink(store, gps) == ("gps",)
@@ -103,7 +106,9 @@ def test_apply_mavlink_maps_fc_messages_to_store_keys():
 def test_unknown_values_are_left_alone():
     store = TelemetryStore()
     store.update("battery", {"voltage": 12.0, "remaining_pct": 50})
-    apply_mavlink(store, mav.MAVLink_sys_status_message(0, 0, 0, 0, 0xFFFF, -1, -1, 0, 0, 0, 0, 0, 0))
+    board = mav.MAVLink(None, srcSystem=1, srcComponent=BATTERY_COMPONENT)
+    apply_mavlink(store, _received(board, board.sys_status_encode(
+        0, 0, 0, 0, 0xFFFF, -1, -1, 0, 0, 0, 0, 0, 0).pack(board)))
     b = store.snapshot()["battery"]
     assert b["voltage"] == 12.0 and b["remaining_pct"] == 50
 
@@ -113,6 +118,21 @@ def _received(link: mav.MAVLink, data: bytes):
     parser = mav.MAVLink(None)
     parser.robust_parsing = True
     return parser.parse_buffer(data)[0]
+
+
+def test_fc_battery_is_ignored():
+    """FC 배터리값(USB 전원 ≈4.2V, 2026-10-10 실측)이 모터보드 값을 덮으면 안 된다."""
+    store = TelemetryStore()
+    store.update("battery", {"voltage": 8.78})
+    fc = mav.MAVLink(None, srcSystem=1, srcComponent=1)
+    sysst = _received(fc, fc.sys_status_encode(0, 0, 0, 0, 4240, 21, 100,
+                                               0, 0, 0, 0, 0, 0).pack(fc))
+    batt = _received(fc, fc.battery_status_encode(0, 0, 0, 0, [4240] + [0xFFFF] * 9,
+                                                  21, 25, -1, 100).pack(fc))
+
+    assert apply_mavlink(store, sysst) == () and apply_mavlink(store, batt) == ()
+    b = store.snapshot()["battery"]
+    assert b["voltage"] == 8.78 and b["remaining_pct"] is None
 
 
 def _fc_heartbeat(base_mode: int):

@@ -11,13 +11,18 @@
 
 워커는 탐지기를 주입받는다 (`Detector`). 기본값이 `detect` 라 화면 코드는 그대로 두고,
 테스트나 다른 모델은 호출 가능한 객체 하나만 넘기면 된다.
+
+박스를 3D 좌표로 옮기는 것도 주입이다 (`DetectWorker.locator`). 이 모듈은 좌표계를 모른다 —
+화면이 `core/wframe.locate` 에 고른 맵을 묶어 넣어 준다. 추론과 같은 스레드에서 같은 프레임으로 돈다.
+결과에서 이 모듈이 읽는 것은 `points` 뿐이다 (박스와 짝짓기). 나머지(카메라 위치 등)는 그대로 화면에 넘긴다.
 """
 from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
+import cv2
 import numpy as np
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
@@ -43,6 +48,15 @@ COCO_KEEP: dict[str, str] = {
 
 class Detector(Protocol):
     def __call__(self, frame: QImage) -> list[Box]: ...
+
+
+class Location(Protocol):
+    """locator 결과 중 워커가 아는 부분 (`wframe.Located`)."""
+    points: np.ndarray | None   # (N,3) — 픽셀마다 3D 점, 안 맞은 행은 NaN. None = 자세 없음
+
+
+# (회색 프레임, 픽셀 (N,2)) → Location. `wframe.locate` 모양
+Locator = Callable[[np.ndarray, np.ndarray], Location]
 
 
 def model_available() -> bool:
@@ -135,6 +149,7 @@ class DetectWorker(QThread):
 
     ready = Signal()            # 모델을 열었다 — 이때부터 프레임을 먹는다
     result = Signal(list)       # list[Box] — 신뢰도 필터를 통과한 것만
+    located = Signal(object, object)    # (locator 결과 그대로, list[(Box, (x,y,z))] 또는 None) — locator 가 있을 때만
     failed = Signal(str)
 
     WAKE_SEC = 0.1              # 프레임이 없어도 이 주기로 깨어나 중단 여부를 본다
@@ -142,6 +157,7 @@ class DetectWorker(QThread):
     def __init__(self, conf: float, detector: Detector = detect, parent=None) -> None:
         super().__init__(parent)
         self.conf = conf        # 화면 슬라이더가 도중에 바꾼다
+        self.locator: Locator | None = None     # 화면이 맵을 바꾸면 도중에 바뀐다
         self._detector = detector
         self._stop = threading.Event()
         self._wake = threading.Event()
@@ -167,11 +183,13 @@ class DetectWorker(QThread):
             if frame is None:
                 continue
             try:
-                boxes = self._detector(frame)
+                boxes = [b for b in self._detector(frame) if b[1] >= self.conf]
+                self.result.emit(boxes)
+                if (locate := self.locator) is not None:
+                    self.located.emit(*self._locate(locate, frame, boxes))
             except Exception as e:
                 self.failed.emit(f"탐지 중단 — {e}")
                 return
-            self.result.emit([b for b in boxes if b[1] >= self.conf])
 
     def _load(self) -> bool:
         """탐지기가 미리 열 것이 있으면 여기서 연다 (모델 로딩은 몇 초가 걸린다).
@@ -185,6 +203,16 @@ class DetectWorker(QThread):
                 return False
         self.ready.emit()
         return True
+
+    @staticmethod
+    def _locate(locate: Locator, frame: QImage, boxes: list[Box]) -> tuple[Location, list | None]:
+        """박스 **중앙** 픽셀을 3D 로. 메시에 안 맞은 박스는 뺀다. 박스가 없어도 부른다 — 카메라 위치."""
+        gray = cv2.cvtColor(qimage_to_bgr(frame), cv2.COLOR_BGR2GRAY)
+        uv = np.array([((b[2] + b[4]) / 2, (b[3] + b[5]) / 2) for b in boxes], float).reshape(-1, 2)
+        loc = locate(gray, uv)
+        if loc.points is None:
+            return loc, None
+        return loc, [(b, tuple(p)) for b, p in zip(boxes, loc.points.tolist()) if np.isfinite(p).all()]
 
     def _take(self) -> QImage | None:
         with self._lock:

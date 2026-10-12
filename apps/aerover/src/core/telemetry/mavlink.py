@@ -19,6 +19,7 @@ UNKNOWN_I = -1
 
 ARMED_FLAG = 0x80           # base_mode 의 MAV_MODE_FLAG_SAFETY_ARMED
 AUTOPILOT_COMPONENT = 1     # MAV_COMP_ID_AUTOPILOT1 — FC 가 쓰는 컴포넌트 번호
+BATTERY_COMPONENT = 180     # MAV_COMP_ID_BATTERY — 파이 drive_server.py 가 모터보드 전압을 보낼 때 쓴다
 RSSI_UNKNOWN = 255          # RC_CHANNELS.rssi 의 "모름"
 RSSI_MAX = 254              # rssi 실제 범위는 0~254
 
@@ -43,6 +44,13 @@ def _attitude(m) -> list[Update]:
 
 
 def _sys_status(m) -> list[Update]:
+    """배터리는 **모터보드 값만 받는다** (파이 `drive_server.py` 가 `BATTERY_COMPONENT` 로 보냄).
+
+    FC 도 SYS_STATUS 를 보내지만 배터리가 FC 에 물려 있지 않아 USB 전원(≈4.2V)이 찍힌다
+    (2026-10-10 실측). 거르지 않으면 1Hz 로 모터보드 값을 덮는다.
+    """
+    if m.get_srcComponent() != BATTERY_COMPONENT:
+        return []
     d: dict = {}
     if m.voltage_battery != UNKNOWN_U16:
         d["voltage"] = m.voltage_battery / 1000                              # mV → V
@@ -54,6 +62,8 @@ def _sys_status(m) -> list[Update]:
 
 
 def _battery_status(m) -> list[Update]:
+    if m.get_srcComponent() != BATTERY_COMPONENT:       # 이유는 `_sys_status` 와 같다
+        return []
     d: dict = {}
     if m.current_consumed != UNKNOWN_I:
         d["used_mah"] = m.current_consumed

@@ -13,20 +13,20 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout,
                                QLabel, QListWidget, QListWidgetItem, QPushButton,
-                               QSizePolicy, QVBoxLayout, QWidget)
+                               QMessageBox, QSizePolicy, QVBoxLayout, QWidget)
 
-from src.config import CAMERAS_FILE, MODELS_DIR, SESSIONS_DIR
-from src.core import checkcache, cropper, subsample
+from src.config import CAMERAS_FILE, MODELS_DIR, SESSIONS_DIR, TO_W_FILE
+from src.core import checkcache, cropper, subsample, wframe
 from src.core.imgcheck import CheckReport, list_images
 from src.core.odm import OdmWorker
 from src.core.workspace import ModelStore
 from src.gl.viewport import MeshViewport
 from src.pages.mapping.steps import STEPS, State, StepRow
-from src.pages.mapping.workers import CheckWorker, CropWorker
+from src.pages.mapping.workers import AlignWorker, CheckWorker, CropWorker
 from src.ui.palette import STATUS_OK_TEXT, STATUS_RED, TEXT_DIM
 from src.ui.planview import CropDialog
 
-PANEL_WIDTH = 250        # 시안 2절 — 뷰어에 자리를 내준다
+PANEL_WIDTH = 220        # 시안 2절 — 뷰어에 자리를 내준다 (Figma v2 Compact Stepper)
 # 서브샘플 결과는 `3D_model/<회차>/sub/<타임스탬프>/` 에 쌓인다.
 # 실행마다 새 폴더라 이전 선별본을 덮지 않는다 — 어떤 세트로 ODM 을 돌렸는지 남는다.
 HUD_MARGIN = 16         # 뷰어 가장자리와 플로팅 버튼 사이 여백
@@ -64,10 +64,12 @@ class MappingPage(QWidget):
 
         self.input_dir: Path | None = None
         self.report: CheckReport | None = None
+        self._accepted = False              # ① 경고를 사람이 보고 넘겼다
         self.sub_dir: Path | None = None
         self._worker: CheckWorker | None = None
         self._odm: OdmWorker | None = None
         self._crop: CropWorker | None = None
+        self._align: AlignWorker | None = None
         self._has_sessions = False
         self._store = ModelStore()          # 회차 → 산출물 폴더. source.txt 는 상대경로다
 
@@ -96,22 +98,24 @@ class MappingPage(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(10)
 
-        row = QHBoxLayout()
-        label = QLabel("회차")
-        label.setObjectName("dim")
+        # 220px 에 "회차" 라벨까지 두면 단계 표시가 잘린다. 이름은 툴팁으로 보낸다.
         self.session_box = QComboBox()
+        self.session_box.setToolTip("회차")
         self.session_box.currentIndexChanged.connect(self._on_session_changed)
-        row.addWidget(label)
-        row.addWidget(self.session_box, 1)
-        lay.addLayout(row)
+        lay.addWidget(self.session_box)
 
-        # 카드가 세로 여유를 똑같이 나눠 갖는다 — 아래에 빈 공간을 남기지 않는다.
+        # 단계는 간격 없이 쌓는다 — 각 칸의 위아래 선이 이어져 하나의 레일이 된다.
+        rail = QVBoxLayout()
+        rail.setSpacing(0)
         self.steps: dict[str, StepRow] = {}
         for i, spec in enumerate(STEPS):
-            step = StepRow(i, spec)
+            step = StepRow(i, spec, last=i == len(STEPS) - 1)
             step.triggered.connect(self._on_step)
+            step.warn_clicked.connect(self._on_warn)
+            step.alt_triggered.connect(self._on_step_alt)
             self.steps[spec.key] = step
-            lay.addWidget(step)
+            rail.addWidget(step)
+        lay.addLayout(rail)
 
         # 카드 아래 남는 자리는 기록 카드가 받는다. 카드에서 뺀 긴 글(검사 요약,
         # 경고 목록, 오류, 저장 경로)이 시간순으로 쌓인다 — 빈 공간으로 두지 않는다.
@@ -183,7 +187,7 @@ class MappingPage(QWidget):
             names = []
         self._has_sessions = bool(names)
         for name in names:
-            self.session_box.addItem(f"{name}  —  {self._stage_label(self.sessions_dir / name)}",
+            self.session_box.addItem(f"{name} — {self._stage_label(self.sessions_dir / name)}",
                                      name)
         if not names:
             self.session_box.addItem("회차 없음", None)
@@ -196,7 +200,7 @@ class MappingPage(QWidget):
         name = self.session_box.itemData(i)
         if name:
             self.session_box.setItemText(
-                i, f"{name}  —  {self._stage_label(self.sessions_dir / name)}")
+                i, f"{name} — {self._stage_label(self.sessions_dir / name)}")
 
     def _on_session_changed(self, index: int) -> None:
         """회차를 고르면 ① 의 입력 폴더가 그 회차가 된다.
@@ -225,9 +229,12 @@ class MappingPage(QWidget):
         # 446장 재검사에 46초가 들고, ② 는 그 결과의 블러 값이 있어야 돌아간다.
         out = self._out_dir()
         self.report = checkcache.load(folder, out) if out else None
+        # 캐시는 통과했거나 경고를 무시한 검사만 적힌다 — 불러왔다면 넘긴 것이다.
+        self._accepted = self.report is not None
+        self.steps["input"].set_warning("")
         if self.report is not None:
             self.steps["input"].set_state(State.DONE)
-            self.steps["input"].set_detail("검사 완료", self.report.summary())
+            self._show_passed(self.report)
             self._note(f"{folder.name} — 지난 검사 결과를 불러왔다 ({self.report.summary()})")
         else:
             self.steps["input"].set_state(State.READY)
@@ -248,8 +255,8 @@ class MappingPage(QWidget):
             self.steps["input"].set_state(State.READY, "")
 
         # 검사에 경고가 있으면 ② 를 열지 않는다. 처리에 29분이 드는데
-        # 입력이 나쁘면 그대로 버려진다.
-        passed = self.report is not None and self.report.ok
+        # 입력이 나쁘면 그대로 버려진다. 사람이 ⚠ 로 넘기면 연다.
+        passed = self._passed()
         sub = self.steps["subsample"]
         sub.set_state(State.DONE if self.sub_dir else State.READY if passed else State.LOCKED)
         if self.sub_dir:
@@ -292,7 +299,7 @@ class MappingPage(QWidget):
     def _sync_crop(self) -> None:
         """④ 는 ③ 의 산출물이 있어야 열린다."""
         step = self.steps["crop"]
-        if self._crop is not None:
+        if self._crop is not None or self._align is not None:
             return
         if self._cropped_path() and self._cropped_path().is_file():
             step.set_state(State.DONE)
@@ -303,6 +310,9 @@ class MappingPage(QWidget):
         else:
             step.set_state(State.LOCKED)
             step.set_detail("")
+        d = self._out_dir()
+        if d and wframe.has_to_w(d):
+            step.button.setText("자동 자르기")      # to_W.json 이 있으면 평면도를 안 띄운다 (`_run_crop`)
 
     def _latest_sub(self) -> Path | None:
         """이 촬영본의 가장 최근 선별본. 폴더명이 타임스탬프라 이름순 정렬이면 된다."""
@@ -332,7 +342,7 @@ class MappingPage(QWidget):
         return d / CROPPED_FILE if d else None
 
     def _busy(self) -> bool:
-        return any(w is not None for w in (self._worker, self._odm, self._crop))
+        return any(w is not None for w in (self._worker, self._odm, self._crop, self._align))
 
     def _model_path(self) -> Path | None:
         d = self._out_dir()
@@ -364,12 +374,19 @@ class MappingPage(QWidget):
         else:
             self._note(f"'{self.steps[key].spec.title}' 은 아직 연결되지 않았다.")
 
+    def _on_step_alt(self, key: str) -> None:
+        if key == "subsample":
+            self._run_subsample(keep_all=True)
+
     def _cancel_step(self, key: str) -> None:
         if key == "input":
             self._cancel_check()
         elif key == "odm" and self._odm is not None:
             self._odm.cancel()
             self._note("ODM 작업을 취소하는 중…", TEXT_DIM)
+        elif key == "crop" and self._align is not None:
+            self._align.cancel()
+            self._note("정합을 취소했다 — ④ 는 평면도로 직접 지정한다", TEXT_DIM)
 
     # ---- ① 입력 검사 ----
 
@@ -409,19 +426,55 @@ class MappingPage(QWidget):
 
     def _on_check_done(self, report: CheckReport) -> None:
         self.report = report
+        self._accepted = False
         if report.ok:
             self.steps["input"].set_state(State.DONE)
-            # 참고는 차단하지 않지만 보이긴 해야 한다 — EXIF 없음이 툴팁에 뜬다.
-            tip = "\n".join([report.summary(), *(f"- {t}" for t in report.notes)])
-            self.steps["input"].set_detail("검사 완료", tip)
+            self._show_passed(report)
             checkcache.save(report, self._out_dir(create=True))
             self._note(f"검사 통과 — {report.summary()}", STATUS_OK_TEXT)
         else:
             # 경고는 통과 못 한 것이다. ① 은 다시 실행할 수 있게 READY 로 둔다.
+            # 재촬영이 불가능하면 ⚠ 로 넘길 수 있다 (`_on_warn`).
+            warns = "\n".join(f"! {w}" for w in report.warnings)
             self.steps["input"].set_state(State.READY)
-            self.steps["input"].set_detail(f"경고 {len(report.warnings)}건",
-                                          "\n".join(f"! {w}" for w in report.warnings))
-            self._note(f"경고 {len(report.warnings)}건 — ODM 에 넣기 전에 재촬영할 것.", STATUS_RED)
+            self.steps["input"].set_detail(f"경고 {len(report.warnings)}건", warns)
+            self.steps["input"].set_warning(f"{warns}\n\n눌러서 무시하고 진행")
+            self._note(f"경고 {len(report.warnings)}건 — 재촬영하거나 ⚠ 로 무시하고 진행.",
+                       STATUS_RED)
+
+    def _passed(self) -> bool:
+        return self.report is not None and (self.report.ok or self._accepted)
+
+    def _show_passed(self, report: CheckReport) -> None:
+        """① 완료 표시. 넘긴 경고는 숨기지 않고 툴팁에 남긴다 — ③ 결과가 나쁘면
+        먼저 의심할 곳이다. 참고(EXIF 없음 등)도 차단하지 않지만 보이긴 해야 한다."""
+        lines = [report.summary(), *(f"! {w}" for w in report.warnings),
+                 *(f"- {t}" for t in report.notes)]
+        self.steps["input"].set_detail("경고 무시" if report.warnings else "검사 완료",
+                                       "\n".join(lines))
+
+    def _on_warn(self, key: str) -> None:
+        """경고를 보여주고 넘길지 묻는다. 넘기면 캐시에 적어 앱을 다시 켜도 유지한다."""
+        report = self.report
+        if key != "input" or report is None or report.ok or self._worker is not None:
+            return
+        box = QMessageBox(QMessageBox.Icon.Warning, "경고 무시",
+                          "\n".join(f"! {w}" for w in report.warnings)
+                          + "\n\n무시하고 진행하면 ODM 결과가 조각나거나 틀어질 수 있다.",
+                          parent=self)
+        go = box.addButton("무시하고 진행", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("취소", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is not go:
+            return
+        self._accepted = True
+        self.steps["input"].set_state(State.DONE)
+        self.steps["input"].set_warning("")
+        self._show_passed(report)
+        checkcache.save(report, self._out_dir(create=True))
+        self._note(f"경고 {len(report.warnings)}건을 무시하고 진행 — {report.summary()}",
+                   STATUS_RED)
+        self._sync_steps()
 
     def _on_check_finished(self) -> None:
         """취소·완료 어느 쪽이든 스레드가 끝나면 불린다."""
@@ -432,15 +485,20 @@ class MappingPage(QWidget):
 
     # ---- ② 서브샘플 ----
 
-    def _run_subsample(self) -> None:
+    def _run_subsample(self, keep_all: bool = False) -> None:
         """4장 묶음마다 가장 선명한 한 장. 블러는 ① 이 잰 값을 그대로 쓴다 —
-        446장 라플라시안에 40초가 넘게 들어 다시 재지 않는다."""
+        446장 라플라시안에 40초가 넘게 들어 다시 재지 않는다.
+
+        `keep_all` (건너뛰기) 은 전체를 그대로 선별 폴더에 복사한다 — 1장 묶음마다 1장.
+        ③ 은 늘 선별 폴더를 읽으므로 건너뛰어도 그 뒤 흐름은 같다. 연사(446장)가 아니라
+        수집 간격을 띄워 찍은 회차(40장)는 4:1 로 줄이면 10장만 남아 ODM 이 돌지 않는다.
+        """
         if self.report is None:
             # 디스크에서 집어온 선별본만 있고 이번 세션에 ① 을 안 돌린 상태다.
             self._note("먼저 ① 입력 검사를 돌려야 한다 — 블러 값이 있어야 고를 수 있다.",
                        STATUS_RED)
             return
-        picked = subsample.select(self.report.stats)
+        picked = subsample.select(self.report.stats, group=1 if keep_all else subsample.GROUP)
         dst = (self._out_dir(create=True) / SUB_DIRNAME
                / datetime.now().strftime("%Y%m%d_%H%M%S"))
         try:
@@ -449,7 +507,8 @@ class MappingPage(QWidget):
             self._note(f"서브샘플 저장 실패 — {e}", STATUS_RED)
             return
         self.sub_dir = dst
-        self._note(subsample.summary(self.report.stats, picked), STATUS_OK_TEXT)
+        self._note(("건너뜀 — 전체 사용: " if keep_all else "") + subsample.summary(self.report.stats, picked),
+                   STATUS_OK_TEXT)
         self._sync_steps()
 
     # ---- ③ ODM 제출 ----
@@ -505,6 +564,7 @@ class MappingPage(QWidget):
         self.steps["odm"].set_detail(result.glb.name, str(result.glb))
         self._note(f"ODM 완료 — {result.uuid[:8]} · 저장: {_shown(result.glb)}", STATUS_OK_TEXT)
         self.load_model_file(str(result.glb))       # 끝나면 바로 띄운다
+        self._start_align(result.glb.parent)
 
     def _on_odm_failed(self, msg: str) -> None:
         # 노드에 남은 작업 자체가 못 쓰는 상태면 기록을 지운다. 안 그러면 그 회차는
@@ -519,39 +579,84 @@ class MappingPage(QWidget):
         self._odm = None
         self._sync_steps()
 
+    # ---- ③→④ 시연 좌표계 정합 ----
+
+    def _start_align(self, model_dir: Path) -> None:
+        """ODM 결과를 W 에 정합해 `to_W.json` 을 만든다 — 이게 있어야 ④ 가 자동 자르기가 된다.
+
+        기존 `to_W.json` 은 먼저 지운다. 새 ODM 결과는 좌표계가 매번 임의라 옛 행렬은 틀렸고,
+        정합이 실패했을 때 그 행렬로 자동 자르기가 되면 안 된다 (평면도로 남는다).
+        """
+        if self._align is not None or not wframe.can_align(model_dir):
+            return
+        (model_dir / TO_W_FILE).unlink(missing_ok=True)
+        step = self.steps["crop"]
+        step.set_state(State.RUNNING)
+        step.set_progress(0, 100)
+        step.set_detail("정합 중…", "마커를 찾아 시연 좌표계(W)에 맞춘다 — 끝나면 자동 자르기가 된다")
+        self._align = AlignWorker(model_dir, self)
+        self._align.progress.connect(self._on_align_progress)
+        self._align.finished_ok.connect(self._on_align_done)
+        self._align.failed.connect(self._on_align_failed)
+        self._align.finished.connect(self._on_align_finished)
+        self._align.start()
+        self.session_box.setEnabled(False)
+
+    def _on_align_progress(self, done: int, total: int) -> None:
+        self.steps["crop"].set_progress(done, total)
+        self.steps["crop"].set_detail(f"정합 {done}/{total}")
+
+    def _on_align_done(self, s) -> None:
+        self._note(f"정합 완료 — 마커 {len(s.markers)}개 · 잔차 중앙 {s.median_mm:.1f} / 최대 {s.max_mm:.1f} mm",
+                   STATUS_OK_TEXT)
+
+    def _on_align_failed(self, msg: str) -> None:
+        self._note(f"정합 실패 — {msg}. ④ 는 평면도로 직접 지정한다", STATUS_RED)
+
+    def _on_align_finished(self) -> None:
+        self._align = None
+        self._sync_steps()
+
     # ---- ④ 배경 제거 ----
 
     def _run_crop(self) -> None:
-        """평면도를 띄워 경계 상자를 받고, 그 상자로 메시를 자른다.
+        """경계 상자를 정하고 그 상자로 메시를 자른다.
 
-        경계값은 **회차마다 다시 잡아야 한다** — GPS 없이 재구성하면 ODM 좌표계가
-        회차마다 임의다. 그래서 코드에 박지 않고 매번 사람이 지정한다 (콘티 3절).
+        회차에 `to_W.json` 이 있으면 **자동** — 시연 좌표계 W 의 상수 상자 (`wframe.CROP_LO/HI`).
+        없으면 평면도를 띄워 사람이 지정한다. GPS 없이 재구성하면 ODM 좌표계가
+        회차마다 임의라 코드에 박을 수 없다 (콘티 3절).
         """
         src = self._model_path()
-        if src is None or not src.is_file() or self._crop is not None:
+        if src is None or not src.is_file() or self._crop is not None or self._align is not None:
             return
 
         self._note("모델을 읽는 중…", TEXT_DIM)
         try:
             scene = cropper.load_scene(src)
-            xyz = cropper.world_vertices(scene)
+            kw = {}
+            if wframe.has_to_w(src.parent):
+                lo, hi, plane = wframe.CROP_LO, wframe.CROP_HI, None
+                kw = {"to_w": wframe.load_to_w(src.parent), "pad": 0.0}
+            else:
+                xyz = cropper.world_vertices(scene)
         except Exception as e:
             self._note(f"모델을 읽지 못했다 — {e}", STATUS_RED)
             return
 
-        dialog = CropDialog(xyz, self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            self._note("배경 제거를 취소했다.", TEXT_DIM)
-            return
+        if not kw:
+            dialog = CropDialog(xyz, self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                self._note("배경 제거를 취소했다.", TEXT_DIM)
+                return
+            lo, hi, plane = dialog.bounds()
 
-        lo, hi, plane = dialog.bounds()
         step = self.steps["crop"]
         step.set_state(State.RUNNING)
         step.set_detail("자르는 중…")
         step.bar.setRange(0, 0)       # 진행률을 알 수 없다 — 불확정 막대로 둔다
 
         self._crop = CropWorker(scene, self._out_dir(create=True) / CROPPED_FILE,
-                                lo, hi, plane, self)
+                                lo, hi, plane, self, **kw)
         self._crop.finished_ok.connect(self._on_crop_done)
         self._crop.failed.connect(lambda m: self._note(m, STATUS_RED))
         self._crop.finished.connect(self._on_crop_finished)
@@ -605,8 +710,9 @@ class MappingPage(QWidget):
     def shutdown(self) -> None:
         """MainWindow.closeEvent 규약. QStackedWidget 안의 위젯은 closeEvent 를
         받지 못해, 이게 없으면 검사 스레드가 남는다 (콘티 15절에서 잡은 버그)."""
-        for w in (self._worker, self._odm, self._crop):
+        for w in (self._worker, self._odm, self._crop, self._align):
             if w is not None:
                 w.cancel()
                 w.wait(3000)
-        self._worker = self._odm = self._crop = None
+        self._worker = self._odm = self._crop = self._align = None
+        self.viewport.release_gl()     # 위젯이 살아 있을 때 GL 자원을 놓는다 (gl/viewport.release_gl)

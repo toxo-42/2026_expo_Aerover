@@ -8,7 +8,13 @@ TEXT_DIM = "#8296AB"  # 보조 정보
 
 ACCENT_BLUE = "#0056D8"  # 기능색 — 활성 토글·슬라이더·버튼·선택 윤곽
 WARN_AMBER = "#F59E0B"  # 주의 — 좌표계 정합 배너·배터리 경고·링크 약함
-STATUS_RED = "#EF4444"  # 위험 — 탐지 박스·모델 없음·오류
+STATUS_RED = "#EF4444"  # 위험 — 모델 없음·오류
+
+# 탐지 클래스 색 (ui/detect_classes.py). 영상 박스 · 라벨 바탕 · 맵 핀이 같이 쓴다.
+# 라벨 글자는 흰색이라 셋 다 흰 글자와 대비가 나는 진한 쪽으로 골랐다.
+CLASS_CASUALTY = STATUS_RED  # 요구조자
+CLASS_VEHICLE = "#2563EB"  # 차량 — 기능색(ACCENT_BLUE)보다 밝아 어두운 영상 위에서 보인다
+CLASS_SAFE = "#16A34A"  # 안전
 
 # 정상은 시안인데, **흰 패널 위에서는 대비가 1.7:1 이라 글자로 못 쓴다.**
 # 그래서 어두운 면(뷰포트·HUD) 위에는 STATUS_OK, 흰 패널 위 글자에는
@@ -18,6 +24,10 @@ STATUS_OK_TEXT = "#0E7490"
 
 # 3D 뷰포트·영상 바탕. 모델과 영상을 돋보이게 하는 다크 슬레이트.
 VIEWPORT_BG = "#131922"
+
+# 매핑 단계 레일 (Figma v2 Compact Stepper). 카드는 패널보다 밝게, 선은 경계선보다 한 단계 진하게
+BG_CARD = "#F8FAFC"
+BORDER_STRONG = "#C7D2DC"
 
 
 def rgbf(hex_color: str) -> tuple[float, float, float]:
@@ -44,24 +54,34 @@ def app_qss() -> str:
     /* 라벨은 배경을 칠하지 않는다 — 흰 패널 위에서 얼룩진다 */
     QLabel {{ background: transparent; }}
     QLabel#dim {{ color: {TEXT_DIM}; }}
-    /* 단계 배지 — 잠금/진행/완료를 색이 아니라 형태로도 구분한다.
-       잠긴 것은 테두리만, 진행 중은 블루 채움, 끝난 것은 시안 채움 + 체크. */
-    QLabel#stepNum {{
-        color: {TEXT_DIM};
-        border: 1px solid {BORDER_LINE};
-        border-radius: 10px;
-        font-size: 11px;
-        font-weight: 600;
+    /* 매핑 단계 레일 — 세로선 위의 상태 점 + 카드 (mapping/steps.py) */
+    QFrame#stepCard {{
+        background: {BG_CARD};
+        border: 1px solid {BORDER_STRONG};
+        border-radius: 8px;
     }}
-    QLabel#stepNumActive {{
+    QFrame#rail {{ background: {BORDER_STRONG}; border: none; border-radius: 1px; }}
+    /* 상태 점 — 잠금/준비/진행/완료를 색이 아니라 형태로도 구분한다.
+       잠긴 것은 테두리만, 준비는 블루 테두리, 진행 중은 블루 채움, 끝난 것은 시안 채움 + 체크. */
+    QLabel#stepDotLocked {{
+        background: #FFFFFF;
+        border: 1px solid {BORDER_STRONG};
+        border-radius: 10px;
+    }}
+    QLabel#stepDotReady {{
+        background: #FFFFFF;
+        border: 2px solid {ACCENT_BLUE};
+        border-radius: 10px;
+    }}
+    QLabel#stepDotRunning {{
         color: #FFFFFF;
         background: {ACCENT_BLUE};
         border: 1px solid {ACCENT_BLUE};
         border-radius: 10px;
-        font-size: 11px;
+        font-size: 14px;
         font-weight: 700;
     }}
-    QLabel#stepNumDone {{
+    QLabel#stepDotDone {{
         color: #FFFFFF;
         background: {STATUS_OK_TEXT};
         border: 1px solid {STATUS_OK_TEXT};
@@ -70,7 +90,7 @@ def app_qss() -> str:
         font-weight: 700;
     }}
 
-    /* 활성 버튼 — 앰버 채움 */
+    /* 활성 버튼 — 블루 채움. hover·pressed 는 같은 색조를 한 단계씩 어둡게 */
     QPushButton {{
         background: {ACCENT_BLUE};
         color: #FFFFFF;
@@ -79,8 +99,8 @@ def app_qss() -> str:
         padding: 6px 14px;
         font-weight: 600;
     }}
-    QPushButton:hover {{ background: #D97706; border-color: #D97706; }}
-    QPushButton:pressed {{ background: #B45309; }}
+    QPushButton:hover {{ background: #0047B3; border-color: #0047B3; }}
+    QPushButton:pressed {{ background: #003A91; border-color: #003A91; }}
 
     /* 비활성 버튼 — 앰버를 흐리지 않고 형태를 바꾼다.
        5단계 순차 잠금은 화면이 대부분의 시간을 이 상태로 보낸다. */
@@ -100,18 +120,32 @@ def app_qss() -> str:
     QPushButton#ghost:hover {{ border-color: {TEXT_DIM}; }}
     QPushButton#ghost:disabled {{ color: {TEXT_DIM}; }}
 
+    /* 단계 제목줄의 경고 아이콘 — 배지(20px)와 같은 높이의 글리프 하나 */
+    QPushButton#stepWarn {{
+        background: transparent;
+        color: {WARN_AMBER};
+        border: none;
+        padding: 0;
+        min-width: 20px;
+        max-width: 20px;
+        min-height: 20px;
+        max-height: 20px;
+        font-size: 15px;
+    }}
+    QPushButton#stepWarn:hover {{ color: #B45309; }}
+
     /* 뷰어 위에 뜨는 플로팅 HUD. 반투명 흰 카드 — 뒤의 3D·영상이 비친다 */
     QFrame#hud {{
         background: rgba(255, 255, 255, 0.94);
         border: 1px solid rgba(226, 232, 240, 0.9);
         border-radius: 10px;
     }}
-    /* 영상 윗변에 붙은 상단 바. 위 모서리는 영상(QFrame#video) 과 같은 반경,
-       아래는 평평하게. 카드보다 조금 더 투명하게 해 영상이 비친다 */
+    /* 영상 윗변에 붙은 상단 바. 불투명 카드색 — 반투명 흰색은 어두운 영상 위에서
+       푸른 기 없는 회색이 돼 앱 톤과 따로 놀았다. 영상은 바 아래에만 그린다 (status) */
     QFrame#hudBar {{
-        background: rgba(255, 255, 255, 0.88);
+        background: {BG_CARD};
         border: none;
-        border-bottom: 1px solid rgba(226, 232, 240, 0.9);
+        border-bottom: 1px solid {BORDER_LINE};
         border-radius: 0;
     }}
     /* 칩이 전역 QWidget 배경을 받아 바 위에 회색 얼룩이 생기는 것을 막는다.
@@ -290,14 +324,25 @@ def app_qss() -> str:
         border-radius: 8px;
     }}
     QLabel#videoText {{ color: {TEXT_DIM}; font-size: 13px; }}
-    /* 영상 왼쪽 아래 해상도·fps — 카메라 OSD 처럼 어두운 반투명 바탕 */
-    QLabel#osd {{
-        background: rgba(0, 0, 0, 0.45);
-        color: #FFFFFF;
-        border-radius: 4px;
-        padding: 2px 6px;
-        font-size: 11px;
+    /* 3D 맵 위의 작은 영상(PiP). 바탕이 뷰포트와 같은 색이라 테두리가 없으면
+       영상이 끊겼을 때 영역이 맵에 묻힌다 — 밝은 테두리로 늘 구분한다 */
+    QFrame#pip {{
+        background: {VIEWPORT_BG};
+        border: 1px solid rgba(226, 232, 240, 0.55);
+        border-radius: 0;
     }}
+    /* 영상 왼쪽 아래 해상도·fps — 상단 바와 같은 카드색 */
+    QLabel#osd {{
+        background: {BG_CARD};
+        color: {TEXT_PRIMARY};
+        border: 1px solid {BORDER_LINE};
+        border-radius: 8px;
+        padding: 6px 10px;
+        font-size: 13px;
+        font-weight: 600;
+    }}
+    /* 하단 제어 패널의 구역 제목 (연결 · 진행 · 수집) */
+    QLabel#zoneTitle {{ font-weight: 600; }}
 
     QProgressBar {{
         background: {BORDER_LINE};

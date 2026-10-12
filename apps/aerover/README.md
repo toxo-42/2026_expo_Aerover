@@ -24,6 +24,40 @@ python app.py
 python -m pytest
 ```
 
+### 윈도우 데스크탑 (NVIDIA GPU)
+
+clone 만 하면 탐지 가중치(`models/best.pt`)와 드론 메시까지 같이 온다. `uv sync` 는 윈도우에서만
+torch · torchvision 을 **CUDA 빌드(cu126)** 로 받는다 (`pyproject.toml` 의 `[tool.uv.sources]`).
+휠에 CUDA 런타임이 들어 있어 시스템 CUDA · cuDNN 버전과는 무관하고, **NVIDIA 드라이버 560 이상**이면 된다.
+
+```powershell
+uv sync
+uv run python -c "import torch; print(torch.__version__, torch.cuda.is_available())"   # 2.14.0+cu126 True 여야 한다
+uv run python app.py
+```
+
+- `False` 면 드라이버 버전부터 본다 (`nvidia-smi` 오른쪽 위 "Driver Version"). YOLO 는 GPU 가 보이면 알아서 쓴다.
+- 환경변수는 PowerShell 문법으로 준다 — `$env:AEROVER_PI_HOST="192.168.0.4"; uv run python app.py`
+- 3D 맵(`3D_model/`)은 저장소에 없다 — 이 PC 에서 NodeODM 을 띄우고([NodeODM 띄우기](#nodeodm-띄우기)) 매핑 페이지에서
+  ① → ⑤ 를 돌린다. ③ 이 끝나면 마커로 정합해 `to_W.json` 이 생기고, 그 맵을 탐지 페이지에서 고르면 핀이 찍힌다.
+- pip 로 만들 때는 `requirements.txt` 머리말의 CUDA 설치 줄을 따른다.
+
+### 장비 없이 — 사진 재생 (가짜 파이)
+
+드론이 없어도 수집 사진을 영상처럼 흘려 탐지 · 3D 맵 핀 · 카메라 위치까지 실제 경로 그대로 확인한다 (`tools/fake_pi.py`).
+
+```bash
+uv run python -m tools.fake_pi sessions/20261004_130739 --odm-camera 3D_model/20261004_130739/cameras.json --fps 5
+AEROVER_CAMERA=3D_model/20261004_130739/replay_camera.json \
+AEROVER_LAYOUT=../aruco/markers_W_60mm_before_glue.json \
+uv run python app.py   # 드론 상태 페이지에서 127.0.0.1:14550 연결
+```
+
+- `--odm-camera` 는 사진을 찍은 카메라(폰)의 K 를 1280×960 용으로 바꿔 `replay_camera.json` 으로 저장한다. `AEROVER_CAMERA` 를 빼면 파이캠 K 로 풀려 재투영 오차가 14px 까지 난다 (폰 K 면 2px).
+- `AEROVER_LAYOUT` 은 그 사진을 찍을 때의 마커 배치표다. 2026-10-11 마커를 다시 붙였으므로 그 이전 회차는 `markers_W_60mm_before_glue.json` 을 준다. 빼면 지금 판의 `markers_W.json` 으로 풀려 자세가 틀어지고 요구조자 핀이 23 → 35개처럼 갈라진다.
+- 재생으로 못 보는 것: 파이캠 렌즈 왜곡 · 화질, 실제 Wi-Fi 지연 · 손실.
+- 화면을 바꾼 뒤에는 `uv run python -m tools.scenario_check` 로 탐지 흐름 11개 시나리오(연결 · 탐지 · 호버 · 맵 변경 · 파이 끊김 · 재연결 · 종료)를 실제 창으로 점검한다 (약 3분, 가짜 파이는 스스로 14650/5104 로 띄운다). `--shots <폴더>` 를 주면 단계별 화면을 캡처한다.
+
 `.venv/` 는 만든 컴퓨터 전용이고 저장소에 넣지 않는다 (맥에서 만든 것은 윈도우에서 안 돈다). 컴퓨터마다 위 명령으로 만든다.
 
 ## 앱 밖에서 필요한 것
@@ -158,7 +192,7 @@ MSP 코드는 없다 — `pi_code/` 의 FC 연결은 **MAVLink 텔레메트리 �
 - 모델은 **탐지 시작을 누른 순간 워커 스레드에서 연다.** ultralytics·torch import 에 몇 초가 걸려서, 그동안 화면에 "모델 여는 중…" 이 뜬다. 앱이 뜰 때 열지 않는다.
 - 추론 중에 들어온 프레임은 **버린다.** 큐에 쌓으면 추론이 링크보다 느릴 때 지연이 무한히 늘어난다 — 실시간 화면에 필요한 것은 지금 것이다.
 - 슬라이더의 신뢰도는 **추론 뒤에** 건다. 돌아가는 중에 움직여도 다시 추론하지 않는다. 모델에는 항상 슬라이더 최소값(0.05)으로 묻는다.
-- 잘 안 잡히면 `AEROVER_DETECT_IMGSZ=960`, 느리면 `480`.
+- 추론 크기 기본은 1280 (팀 학습본의 학습 크기). 느리면 `AEROVER_DETECT_IMGSZ=960` · `640`.
 
 ## 모형 학습 — best.pt 만들기
 
