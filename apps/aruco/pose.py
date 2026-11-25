@@ -49,7 +49,7 @@ class Pose:
 
 
 def load_camera(path: Path = CAMERA_FILE) -> tuple[np.ndarray, np.ndarray]:
-    d = json.loads(Path(path).read_text())
+    d = json.loads(Path(path).read_text(encoding="utf-8"))
     return np.array(d["K"]), np.array(d["dist"])
 
 
@@ -60,7 +60,7 @@ def load_layout(path: Path = LAYOUT_FILE) -> dict[int, np.ndarray]:
       {"corners": [[x,y,z] x4]}          marker_map.py 가 사진으로 잰 것 — 방향 자유
       {"center": [x,y,z], "up": "+Y"}    자로 잰 것 — 판에 평평하게, 변을 축과 나란히
     """
-    d = json.loads(Path(path).read_text())
+    d = json.loads(Path(path).read_text(encoding="utf-8"))
     return {int(k): np.array(m["corners"], float) if "corners" in m
             else world_corners(np.array(m["center"]), d["size_m"], m["up"])
             for k, m in d["markers"].items()}

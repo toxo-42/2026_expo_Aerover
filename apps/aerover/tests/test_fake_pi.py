@@ -50,7 +50,7 @@ def test_replay_camera_solves_pose_of_session_photo(tmp_path):
     """폰 K 로 바꾸면 재생 프레임의 자세가 2~4px 오차로 풀린다 (파이캠 K 면 14px)."""
     from src.core import wframe
     src = tmp_path / "cameras.json"
-    src.write_text((MODELS_DIR / RUN / "cameras.json").read_text())
+    src.write_text((MODELS_DIR / RUN / "cameras.json").read_text(encoding="utf-8"), encoding="utf-8")
     est = wframe.load_estimator(fake_pi.write_replay_camera(src))
     photo = fake_pi.list_images(SESSIONS_DIR / RUN)[0]
     gray = cv2.imdecode(np.frombuffer(fake_pi.encode_frame(photo), np.uint8), cv2.IMREAD_GRAYSCALE)
@@ -103,8 +103,8 @@ def test_replay_camera_file_is_what_pose_loader_reads(tmp_path):
     src = tmp_path / "cameras.json"
     src.write_text(json.dumps({"x": {"projection_type": "brown", "width": 4, "height": 3,
                                      "focal_x": 1, "focal_y": 1, "c_x": 0, "c_y": 0,
-                                     "k1": 0, "k2": 0, "p1": 0, "p2": 0, "k3": 0}}))
+                                     "k1": 0, "k2": 0, "p1": 0, "p2": 0, "k3": 0}}), encoding="utf-8")
     out = fake_pi.write_replay_camera(src)
-    d = json.loads(out.read_text())
+    d = json.loads(out.read_text(encoding="utf-8"))
     assert out.name == "replay_camera.json" and d["image_size"] == [1280, 960]
     assert np.array(d["K"]).shape == (3, 3) and len(d["dist"]) == 5

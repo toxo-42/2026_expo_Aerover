@@ -48,7 +48,7 @@ def _tinted(svg: str, color: str) -> QPixmap:
 def _nav_icon(path) -> QIcon:
     """선택 안 된 아이콘은 흐리게, 선택된 것은 진하게. 체크 상태(On/Off)마다
     그림을 따로 넣어 두면 버튼이 체크될 때 Qt 가 알아서 바꿔 그린다."""
-    svg = path.read_text()
+    svg = path.read_text(encoding="utf-8")
     icon = QIcon()
     icon.addPixmap(_tinted(svg, TEXT_DIM), QIcon.Mode.Normal, QIcon.State.Off)
     icon.addPixmap(_tinted(svg, TEXT_PRIMARY), QIcon.Mode.Normal, QIcon.State.On)

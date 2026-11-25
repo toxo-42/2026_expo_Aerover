@@ -28,10 +28,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.config import PI_HOST, PI_PORT, SERIAL_PORT, SESSIONS_DIR, TARGET_AGL_M
+from src.config import (PI_HOST, PI_PORT, REPLAY_DIR, REPLAY_FPS, SERIAL_PORT, SESSIONS_DIR,
+                        TARGET_AGL_M)
 from src.core import telemetry as tm
 from src.core.capture import CaptureSession
 from src.core.link import LinkHub
+from src.core.replay import ReplayServer
 from src.ui.hud_icons import BatteryIcon, GpsIcon, LinkIcon
 from src.ui.metric import MetricRow
 from src.ui.palette import (ACCENT_BLUE, STATUS_OK_TEXT, STATUS_RED, TEXT_DIM, TEXT_PRIMARY,
@@ -53,7 +55,7 @@ ALT_TOLERANCE = 0.10  # 목표 고도 ±10% 안이면 정상
 
 
 def battery_color(pct: int | None) -> str:
-    """잔량 % → 상태색. % 를 모르면(파이 모터보드는 전압만 보낸다) 판정 없이 기본 글자색."""
+    """잔량 % → 상태색. % 를 모르면(FC 가 아직 잔량을 안 보냈다) 판정 없이 기본 글자색."""
     if pct is None:
         return TEXT_PRIMARY
     if pct < BATT_CRIT_PCT:
@@ -248,6 +250,7 @@ class StatusPage(QWidget):
         self._saving = False
         self._frame_times: list[float] = []
         self._link_failed = False      # 실패 뒤 closed 가 와도 빨간 점을 남긴다
+        self._replay: ReplayServer | None = None   # [재생] 중이면 앱 안의 가짜 파이
 
         # 영상이 화면을 채우고, 제어부는 아래 고정 패널에 둔다 (시안 1절).
         root = QVBoxLayout(self)
@@ -422,7 +425,11 @@ class StatusPage(QWidget):
         self.addr.setToolTip("파이 주소 (호스트:포트)")
         self.connect_btn = QPushButton("연결")
         self.connect_btn.clicked.connect(self._toggle_link)
-        row.addLayout(self._zone("연결", self.link_dot, self.addr, self.connect_btn))
+        # 통신이 끊겼을 때 — 녹화 회차를 파이 영상처럼 흘린다. 끊을 때는 같은 [해제] 를 쓴다.
+        self.replay_btn = QPushButton("재생")
+        self.replay_btn.setToolTip(f"통신이 끊겼을 때 녹화 영상 재생 — {REPLAY_DIR.name} · {REPLAY_FPS:g} fps")
+        self.replay_btn.clicked.connect(self._start_replay)
+        row.addLayout(self._zone("연결", self.link_dot, self.addr, self.connect_btn, self.replay_btn))
         row.addWidget(self._sep())
 
         # ---- 진행 (늘어나는 칸) ----
@@ -514,11 +521,29 @@ class StatusPage(QWidget):
         except ValueError:
             self._set_note(self.note, "주소 형식은 호스트:포트", STATUS_RED)
             return
+        self._start_link(host, port)
 
+    def _start_replay(self) -> None:
+        """녹화 회차를 앱 안의 가짜 파이로 띄우고 거기에 붙는다. 이후 경로는 실제 링크와 같다."""
+        if self.hub.active:
+            return
+        server = ReplayServer(REPLAY_DIR, REPLAY_FPS)
+        try:
+            port = server.start()
+        except (ValueError, OSError) as e:
+            self._set_dot(self.link_dot, STATUS_RED)
+            self._set_note(self.note, f"재생 실패 — {e}", STATUS_RED)
+            return
+        self._replay = server
+        self._start_link("127.0.0.1", port)
+        self._set_note(self.note, f"재생 준비 중… {REPLAY_DIR.name}", TEXT_DIM)
+
+    def _start_link(self, host: str, port: int) -> None:
         self._link_failed = False
         self.hub.connect_to(host, port)
 
         self.addr.setEnabled(False)
+        self.replay_btn.setEnabled(False)
         self.connect_btn.setText("해제")
         self._set_dot(self.link_dot, WARN_AMBER)
         self._set_note(self.note, "연결 중…", TEXT_DIM)
@@ -530,9 +555,13 @@ class StatusPage(QWidget):
         self.hub.disconnect_from()
 
     def _on_link_finished(self) -> None:
+        if self._replay is not None:
+            self._replay.stop()
+            self._replay = None
         self._frame_times.clear()
         self._stop_capture()
         self.addr.setEnabled(True)
+        self.replay_btn.setEnabled(True)
         self.connect_btn.setText("연결")
         self.capture_btn.setEnabled(False)
         self.video.clear()
@@ -543,6 +572,9 @@ class StatusPage(QWidget):
 
     def _on_connected(self) -> None:
         self._set_dot(self.link_dot, STATUS_OK_TEXT)
+        if self._replay is not None:
+            self._set_note(self.note, f"녹화 재생 중 — {REPLAY_DIR.name}", STATUS_OK_TEXT)
+            return
         self._set_note(self.note, "연결됨 — 영상이 오면 수집할 수 있다", STATUS_OK_TEXT)
 
     def _on_failed(self, message: str) -> None:
@@ -552,18 +584,19 @@ class StatusPage(QWidget):
 
     def _on_frame(self, image: QImage, raw: bytes) -> None:
         self.video.set_frame(image)
-        self.capture_btn.setEnabled(True)
+        replaying = self._replay is not None
+        self.capture_btn.setEnabled(not replaying)      # 재생 영상을 새 회차로 다시 저장하지 않는다
 
         now = time.time()
         self._frame_times.append(now)
         del self._frame_times[:-15]
         span = self._frame_times[-1] - self._frame_times[0]
         fps = (len(self._frame_times) - 1) / span if span > 0 else 0.0
-        self.osd.setText(f"{image.width()}×{image.height()} · {fps:.1f} fps")
+        self.osd.setText(f"{'REPLAY · ' if replaying else ''}{image.width()}×{image.height()} · {fps:.1f} fps")
         if self.osd.isHidden():      # 첫 프레임 — 이제 수집할 수 있다
             self.osd.show()
             self._sync_capture_dots()
-            if not self._saving:
+            if not self._saving and not replaying:
                 self._set_note(self.note, "영상 수신 중 — 수집할 수 있다", STATUS_OK_TEXT)
         self._place_osd()      # 글자 폭이 바뀌면 크기를 다시 잡는다
 

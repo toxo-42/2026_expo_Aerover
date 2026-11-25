@@ -17,7 +17,7 @@ def initial_state() -> dict:
     return {
         "gps": {"lat": 0.0, "lon": 0.0, "speed_kmh": 0.0, "heading": 0.0,
                 "alt_m": 0, "sats": 0},
-        # remaining_pct 가 None 이면 "모름" — 파이 모터보드 경로는 전압만 보낸다.
+        # remaining_pct 가 None 이면 "모름" — FC 가 잔량을 보내기 전이다.
         "battery": {"voltage": 0.0, "current": 0.0, "used_mah": 0, "remaining_pct": None},
         # source 는 이 값을 누가 줬는지다 ("crsf" | "mavlink"). 두 경로의 수신 주기가
         # 6배 넘게 달라서 연결 판정 임계값이 달라진다 — `status.LinkJudge` 참고.

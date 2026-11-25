@@ -195,7 +195,7 @@ class OdmJob:
         """
         if self.cameras is None:
             return dict(self._options)
-        return {**self._options, "cameras": self.cameras.read_text()}
+        return {**self._options, "cameras": self.cameras.read_text(encoding="utf-8")}
 
     def _on_upload(self, pct: float) -> None:
         self._sink.on_progress(pct * UPLOAD_SHARE, f"업로드 {pct:.0f}%")

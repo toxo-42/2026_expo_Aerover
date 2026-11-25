@@ -43,7 +43,7 @@ def app_qss() -> str:
     QWidget {{
         background: {BG_MAIN};
         color: {TEXT_PRIMARY};
-        font-family: 'Helvetica Neue', 'Apple SD Gothic Neo';
+        font-family: 'Helvetica Neue', 'Apple SD Gothic Neo', 'Segoe UI', 'Malgun Gothic';
         font-size: 13px;
     }}
     QFrame#panel {{

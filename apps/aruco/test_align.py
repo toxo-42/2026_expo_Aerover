@@ -30,7 +30,7 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 def load():
     cam = align.Camera.load(DATA / "cameras.json")
     shots = align.load_shots(DATA / "shots.geojson")
-    rec = json.loads((DATA / "reconstruction.json").read_text())[0]
+    rec = json.loads((DATA / "reconstruction.json").read_text(encoding="utf-8"))[0]
     return cam, shots, rec
 
 

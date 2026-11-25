@@ -45,10 +45,10 @@ def test_model_to_w_board_is_level():
 
 def _subset_run(tmp_path: Path, every: int = 4) -> Path:
     """RUN 의 ODM 산출물에서 사진을 `every` 장마다 하나만 남긴 회차 폴더 — 정합 140초를 35초로."""
-    g = json.loads((RUN / "shots.geojson").read_text())
+    g = json.loads((RUN / "shots.geojson").read_text(encoding="utf-8"))
     g["features"] = g["features"][::every]
-    (tmp_path / "shots.geojson").write_text(json.dumps(g))
-    (tmp_path / "cameras.json").write_text((RUN / "cameras.json").read_text())
+    (tmp_path / "shots.geojson").write_text(json.dumps(g), encoding="utf-8")
+    (tmp_path / "cameras.json").write_text((RUN / "cameras.json").read_text(encoding="utf-8"), encoding="utf-8")
     return tmp_path
 
 
@@ -78,9 +78,9 @@ def test_make_to_w_refuses_bad_alignment(tmp_path, monkeypatch):
 
 def test_can_align_needs_odm_pose_files(tmp_path):
     assert not wframe.can_align(tmp_path)
-    (tmp_path / "shots.geojson").write_text("{}")
+    (tmp_path / "shots.geojson").write_text("{}", encoding="utf-8")
     assert not wframe.can_align(tmp_path)
-    (tmp_path / "cameras.json").write_text("{}")
+    (tmp_path / "cameras.json").write_text("{}", encoding="utf-8")
     assert wframe.can_align(tmp_path)
 
 

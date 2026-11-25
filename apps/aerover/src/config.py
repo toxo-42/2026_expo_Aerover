@@ -77,7 +77,7 @@ POSE_LAYOUT_FILE = Path(_env("AEROVER_LAYOUT", str(ARUCO_DIR / "markers_W.json")
 # ---- 장비 · 파이 링크 ----
 
 # 라즈베리파이. 망이 바뀌면 파이에서 `hostname -I` 로 다시 확인한다.
-PI_HOST = _env("AEROVER_PI_HOST", "192.168.0.4")
+PI_HOST = _env("AEROVER_PI_HOST", "192.168.0.5")
 
 # 영상 링크 방식.  rtp = UDP — MAVLink 로 제어하고 RTP/JPEG 로 영상을 받는다 (기본)
 #                 tcp = 옛 방식 — 길이 4바이트 + JPEG 를 TCP 로 받는다 (파이 `app.py tcp`)
@@ -89,6 +89,12 @@ RTP_PORT = int(
     _env("AEROVER_RTP_PORT", "5004")
 )  # 지상국이 RTP 영상을 받는 UDP 포트. 파이 설정과 같아야 한다
 TCP_PORT = 5001  # 옛 TCP 스트림 포트
+
+# 통신이 끊겼을 때 드론 상태 페이지 [재생] 이 영상처럼 흘리는 녹화 회차 (`core/replay.py`).
+# 파이캠 1280×960 수집본이라 기본 카메라 K · 2026-10-11 재접착 뒤 배치표 그대로 탐지된다.
+# 수집은 0.5초 간격(2fps)이었다 — 5fps 면 2.5배속, 400장이 80초에 한 바퀴.
+REPLAY_DIR = Path(_env("AEROVER_REPLAY", str(SESSIONS_DIR / "20261013_093905")))
+REPLAY_FPS = float(_env("AEROVER_REPLAY_FPS", "5"))
 # 화면의 "호스트:포트" 칸 기본값 — rtp 면 파이의 MAVLink 포트, tcp 면 스트림 포트
 PI_PORT = int(
     _env("AEROVER_PI_PORT", str(MAVLINK_PORT if LINK_MODE == "rtp" else TCP_PORT))

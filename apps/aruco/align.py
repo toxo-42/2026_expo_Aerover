@@ -52,7 +52,7 @@ class Camera:
 
     @classmethod
     def load(cls, cameras_json: str | Path) -> "Camera":
-        d = json.loads(Path(cameras_json).read_text())
+        d = json.loads(Path(cameras_json).read_text(encoding="utf-8"))
         c = next(iter(d.values()))
         if c["projection_type"] != "brown":
             raise ValueError(f"brown 모델만 지원한다 (받은 값: {c['projection_type']})")
@@ -81,7 +81,7 @@ class Camera:
 
 def load_shots(shots_geojson: str | Path) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     """파일명 → (R, C). R 은 월드→카메라 회전, C 는 카메라 위치."""
-    g = json.loads(Path(shots_geojson).read_text())
+    g = json.loads(Path(shots_geojson).read_text(encoding="utf-8"))
     out = {}
     for f in g["features"]:
         p = f["properties"]

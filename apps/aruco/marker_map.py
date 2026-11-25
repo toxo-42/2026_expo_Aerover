@@ -360,7 +360,7 @@ def main() -> None:
            "markers": {str(i): {"corners": np.round(W[i], 5).tolist(), "seen": seen[i]} for i in sorted(W)},
            "stats": {"frames": len(frames), "reproj_median_px": round(float(np.median(allerr)), 3),
                      "reproj_max_px": round(float(allerr.max()), 3), "ref_id": ref}}
-    a.out.write_text(json.dumps(doc, indent=2, ensure_ascii=False))
+    a.out.write_text(json.dumps(doc, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"\n저장: {a.out}")
 
 

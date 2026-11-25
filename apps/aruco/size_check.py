@@ -85,7 +85,7 @@ def main() -> None:
             loo[k].append((p.C + t * d - corners.mean(0))[:2] * 1000)
 
     c = np.array(counts)
-    print(f"{a.folder.name} — {len(files)}장, 배치표 {a.layout.name} (한 변 {json.loads(a.layout.read_text())['size_m'] * 100:.0f}cm)\n")
+    print(f"{a.folder.name} — {len(files)}장, 배치표 {a.layout.name} (한 변 {json.loads(a.layout.read_text(encoding="utf-8"))['size_m'] * 100:.0f}cm)\n")
 
     print("1. 촬영 조건")
     if heights:
@@ -115,10 +115,10 @@ def main() -> None:
         print("   계산할 수 없음 — 마커가 3개 이상 보인 장이 없다")
 
     print("4. 배치 · 정합")
-    seen_n = {k: m.get("seen") for k, m in json.loads(a.layout.read_text())["markers"].items()}
+    seen_n = {k: m.get("seen") for k, m in json.loads(a.layout.read_text(encoding="utf-8"))["markers"].items()}
     print(f"   배치표 마커별 관측 장수 {seen_n}  (10장 미만이면 그 마커 좌표를 덜 믿는다)")
     if a.model:
-        tw = json.loads((a.model / "to_W.json").read_text())
+        tw = json.loads((a.model / "to_W.json").read_text(encoding="utf-8"))
         print(f"   {a.model.name}/to_W.json — 코너 {tw['corners']}개, "
               f"잔차 중앙 {tw['residual_median_mm']} / 최대 {tw['residual_max_mm']} mm")
 

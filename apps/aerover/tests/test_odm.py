@@ -85,14 +85,14 @@ def _job(node, dest, **kw) -> tuple[OdmJob, Sink]:
 def test_fresh_submit_runs_to_completion(tmp_path):
     node = FakeNode()
     cams = tmp_path / "cams.json"
-    cams.write_text(json.dumps({"k": 1}))
+    cams.write_text(json.dumps({"k": 1}), encoding="utf-8")
     job, sink = _job(node, tmp_path / "out", images=[Path("a.jpg"), Path("b.jpg")],
                      name="run1", cameras=cams)
 
     result = job.run()
 
     assert node.created["files"] == ["a.jpg", "b.jpg"] and node.created["name"] == "run1"
-    assert node.created["options"]["cameras"] == cams.read_text()
+    assert node.created["options"]["cameras"] == cams.read_text(encoding="utf-8")
     assert node.created["options"]["gltf"] is True and "cameras" not in odm.OPTIONS
     assert sink.submitted == ["aab831fa-1234"]
     assert result.uuid == "aab831fa-1234"

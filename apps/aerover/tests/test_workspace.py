@@ -51,10 +51,10 @@ def test_record_written_on_another_computer_matches_by_folder_name(repo):
     session = root / "sessions" / "20260907_1"
     legacy = root / "3D_model" / "20260907_1"
     legacy.mkdir(parents=True)
-    (legacy / SOURCE_FILE).write_text("/Users/someone/dev/aerover/sessions/20260907_1\n")
+    (legacy / SOURCE_FILE).write_text("/Users/someone/dev/aerover/sessions/20260907_1\n", encoding="utf-8")
     assert store.find(session) == legacy
 
-    (legacy / SOURCE_FILE).write_text("/Users/someone/dev/aerover/sessions/other\n")
+    (legacy / SOURCE_FILE).write_text("/Users/someone/dev/aerover/sessions/other\n", encoding="utf-8")
     assert store.find(session) is None
 
 
@@ -64,5 +64,5 @@ def test_existing_local_path_must_match_exactly(repo):
     (root / "other" / "20260907_1").mkdir(parents=True)
     d = root / "3D_model" / "20260907_1"
     d.mkdir(parents=True)
-    (d / SOURCE_FILE).write_text("other/20260907_1\n")      # 이름은 같지만 실제로 다른 폴더
+    (d / SOURCE_FILE).write_text("other/20260907_1\n", encoding="utf-8")      # 이름은 같지만 실제로 다른 폴더
     assert store.find(session) is None

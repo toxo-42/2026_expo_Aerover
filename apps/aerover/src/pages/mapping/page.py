@@ -354,7 +354,7 @@ class MappingPage(QWidget):
             return ""
         d = self._out_dir()
         f = d / UUID_FILE if d else None
-        return f.read_text().strip() if f and f.is_file() else ""
+        return f.read_text(encoding="utf-8").strip() if f and f.is_file() else ""
 
     # ---- 동작 ----
 
@@ -551,7 +551,7 @@ class MappingPage(QWidget):
         `self.input_dir` 가 아니라 **워커가 들고 있는 dest** 에 적는다 —
         29분 사이에 사용자가 회차를 바꿔도 uuid 는 제출한 회차에 남아야 한다.
         """
-        (self._odm.dest / UUID_FILE).write_text(uuid + "\n")
+        (self._odm.dest / UUID_FILE).write_text(uuid + "\n", encoding="utf-8")
 
     def _on_odm_progress(self, pct: float, stage: str) -> None:
         step = self.steps["odm"]

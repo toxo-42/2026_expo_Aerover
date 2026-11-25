@@ -142,7 +142,7 @@ def report(res: dict) -> None:
 
     # 번들조정값과 비교. OpenSfM 초점은 max(w, h) 로 나눈 값이다
     if AEROVER_CAM.exists():
-        ba = next(iter(json.loads(AEROVER_CAM.read_text()).values()))
+        ba = next(iter(json.loads(AEROVER_CAM.read_text(encoding="utf-8")).values()))
         print(f"\n참고 — aerover 번들조정값: 초점 {ba['focal_x'] * max(w, h):.1f}px, k1 {ba['k1']:.4f}"
               f"  (이번 값: {K[0, 0]:.1f}px, k1 {d[0]:.4f})")
 
@@ -160,7 +160,7 @@ def main() -> None:
     images = sorted(p for p in a.folder.iterdir() if p.suffix.lower() in (".jpg", ".jpeg", ".png"))
     res = calibrate(images, a.cols, a.rows, a.square / 1000)
     report(res)
-    a.out.write_text(json.dumps(res, indent=2, ensure_ascii=False))
+    a.out.write_text(json.dumps(res, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"\n저장: {a.out}")
 
     if a.preview:

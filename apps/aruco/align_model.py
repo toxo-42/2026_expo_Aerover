@@ -37,7 +37,7 @@ OUTLIER_PX = 3.0            # 재투영이 이보다 (그리고 중앙값 3배�
 
 def source_images(model_dir: Path) -> Path:
     """source.txt 는 aerover 루트 기준 상대경로다 (aerover/src/core/workspace.py)."""
-    rel = (model_dir / "source.txt").read_text().strip()
+    rel = (model_dir / "source.txt").read_text(encoding="utf-8").strip()
     return (model_dir.parent.parent / rel).resolve()
 
 
@@ -146,7 +146,7 @@ def main() -> None:
         n = [r.used[k] for k in keys if k[0] == i]
         print(f"  ID {i}: 코너 잔차 {' '.join(f'{x:.1f}' for x in rr)} mm   관측 {min(n)}~{max(n)}장")
 
-    (d / "to_W.json").write_text(json.dumps(r.to_json(a.layout.name), indent=2, ensure_ascii=False))
+    (d / "to_W.json").write_text(json.dumps(r.to_json(a.layout.name), indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"\n저장: {d / 'to_W.json'}")
 
 

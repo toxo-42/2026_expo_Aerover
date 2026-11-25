@@ -57,7 +57,7 @@ def has_to_w(model_dir: Path) -> bool:
 
 def load_to_w(model_dir: Path) -> np.ndarray:
     """회차 폴더 → ODM→W 4x4."""
-    return np.array(json.loads((model_dir / TO_W_FILE).read_text())["matrix"], float)
+    return np.array(json.loads((model_dir / TO_W_FILE).read_text(encoding="utf-8"))["matrix"], float)
 
 
 # 자동 정합을 받아들이는 잔차 중앙값 상한. 정상 회차는 2~3mm (perfect_ODM 2.3 · 20260922_234609 2.2).
@@ -92,7 +92,7 @@ def make_to_w(model_dir: Path, images: Path | None = None,
     if med > MAX_ALIGN_MEDIAN_MM:
         raise ValueError(f"정합 잔차 중앙 {med:.1f}mm > {MAX_ALIGN_MEDIAN_MM:.0f}mm — "
                          f"배치표(markers_W.json)가 지금 판과 맞는지 확인. to_W.json 은 만들지 않았다")
-    (model_dir / TO_W_FILE).write_text(json.dumps(r.to_json(POSE_LAYOUT_FILE.name), indent=2, ensure_ascii=False))
+    (model_dir / TO_W_FILE).write_text(json.dumps(r.to_json(POSE_LAYOUT_FILE.name), indent=2, ensure_ascii=False), encoding="utf-8")
     return AlignSummary(len(r.keys), sorted({i for i, _ in r.keys}), med, float(r.residual_mm.max()))
 
 

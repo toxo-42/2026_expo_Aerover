@@ -46,7 +46,7 @@ def save(report: CheckReport, dest: Path) -> Path | None:
     }
     dest.mkdir(parents=True, exist_ok=True)
     out = dest / CACHE_FILE
-    out.write_text(json.dumps(data))
+    out.write_text(json.dumps(data), encoding="utf-8")
     return out
 
 
@@ -56,7 +56,7 @@ def load(folder: Path, dest: Path) -> CheckReport | None:
     if not path.is_file():
         return None
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     if data.get("version") != VERSION or data.get("fingerprint") != fingerprint(folder):
